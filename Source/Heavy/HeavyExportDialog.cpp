@@ -9,7 +9,7 @@
 
 #include "Dialogs/Dialogs.h"
 #include "HeavyExportDialog.h"
-//#include "Dialogs/HelpDialog.h"
+// #include "Dialogs/HelpDialog.h"
 
 #include "PluginEditor.h"
 #include "Components/PropertiesPanel.h"
@@ -24,6 +24,51 @@
 #include "OWLExporter.h"
 #include "PdExporter.h"
 #include "WASMExporter.h"
+
+// Placeholder ESP32 exporter view
+class ESP32Exporter final : public ExporterBase {
+public:
+    ESP32Exporter(PluginEditor* editor, ExportingProgressView* exportingView)
+        : ExporterBase(editor, exportingView)
+    {
+        placeholder.setText("ESP32 export is coming soon", dontSendNotification);
+        placeholder.setJustificationType(Justification::centred);
+        placeholder.setColour(Label::textColourId, findColour(PlugDataColour::panelTextColourId));
+        addAndMakeVisible(placeholder);
+
+        // PoC: sempre permitir clicar em Export nesta opção
+        validPatchSelected = true;
+        unsavedLabel.setVisible(false);
+        exportButton.setEnabled(true);
+    }
+
+    // Minimal state plumbing
+    ValueTree getState() override { return ValueTree("ESP32Exporter"); }
+    void setState(ValueTree& /*state*/) override { }
+
+private:
+    Label placeholder;
+
+    void resized() override {
+        // Call base layout to place panel and export button
+        ExporterBase::resized();
+        // Keep placeholder at the top without covering controls
+        placeholder.setBounds(0, 0, getWidth(), 24);
+    }
+
+    bool performExport(String const& /*pdPatch*/, String const& /*outdir*/, String const& /*name*/,
+               String const& /*copyright*/, StringArray const& /*searchPaths*/) override
+    {
+        // Por ora, apenas loga um Hello World no console de exportação
+        if (exportingView)
+            exportingView->logToConsole("ESP32: hello world\n");
+
+        // Retorna false para indicar sucesso ao chamador
+        return false;
+    }
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(ESP32Exporter)
+};
 
 class ExporterSettingsPanel final : public Component
     , private ListBoxModel {
@@ -43,7 +88,8 @@ public:
         "DPF Audio Plugin",
         "OWL Platform",
         "Pd External",
-        "WebAssembly"
+        "WebAssembly",
+        "ESP32"
     };
 
     ExporterSettingsPanel(PluginEditor* editor, ExportingProgressView* exportingView)
@@ -54,6 +100,7 @@ public:
         addChildComponent(views.add(new OWLExporter(editor, exportingView)));
         addChildComponent(views.add(new PdExporter(editor, exportingView)));
         addChildComponent(views.add(new WASMExporter(editor, exportingView)));
+        addChildComponent(views.add(new ESP32Exporter(editor, exportingView)));
 
         addAndMakeVisible(listBox);
 
@@ -108,6 +155,7 @@ public:
         state.appendChild(views[3]->getState(), nullptr);
         state.appendChild(views[4]->getState(), nullptr);
         state.appendChild(views[5]->getState(), nullptr);
+        state.appendChild(views[6]->getState(), nullptr);
 
         auto settingsTree = SettingsFile::getInstance()->getValueTree();
 

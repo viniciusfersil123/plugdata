@@ -153,7 +153,7 @@ class WelcomePanel final : public Component
                 nvgFontSize(nvg, 12);
                 nvgTextAlign(nvg, NVG_ALIGN_CENTER | NVG_ALIGN_LEFT);
                 nvgFillColor(nvg, NVGComponent::convertColour(findColour(PlugDataColour::panelTextColourId)));
-                nvgText(nvg, 92, 45, "New Patch", nullptr);
+                nvgText(nvg, 92, 45, "Morro do dendê", nullptr);
 
                 nvgFontFace(nvg, "Inter-Regular");
                 nvgText(nvg, 92, 63, "Create a new empty patch", nullptr);
