@@ -139,14 +139,98 @@ private:
                 exportingView->logToConsole("Aviso: diretório 'c' não encontrado em " + outputDir.getFullPathName() + "\n");
         }
 
-        // Limpa pastas intermediárias geradas pelo hvcc (opcional)
-        outputDir.getChildFile("ir").deleteRecursively();
-        outputDir.getChildFile("hv").deleteRecursively();
+    // 3.5) Patch de formatação no HvMessage.c (corrige printf para ESP-IDF)
+    if (exportingView)
+        exportingView->logToConsole("Iniciando (2/4) Patch formatting if needed\n");
 
-        // Delay curto para garantir código de saída correto
-        Time::waitForMillisecondCounter(Time::getMillisecondCounter() + 300);
+    {
+        auto hvMessageFile = targetDir.getChildFile("HvMessage.c");
+        if (hvMessageFile.existsAsFile()) {
+            auto content = hvMessageFile.loadFileAsString();
 
-        return getExitCode();
+            bool changed = false;
+
+            // Adiciona <inttypes.h> se ainda não existir (após HvMessage.h)
+            if (! content.contains("<inttypes.h>")) {
+                auto anchor = String("#include \"HvMessage.h\"");
+                int pos = content.indexOf(anchor);
+                if (pos >= 0) {
+                    pos += anchor.length();
+                    content = content.substring(0, pos) + "\n#include <inttypes.h>" + content.substring(pos);
+                    changed = true;
+                }
+            }
+
+            // Substitui "0x%X" por "0x%" PRIX32 em todas as ocorrências
+            if (content.contains("\"0x%X\"")) {
+                content = content.replace("\"0x%X\"", "\"0x%\" PRIX32");
+                changed = true;
+            }
+
+            if (changed) {
+                hvMessageFile.replaceWithText(content);
+                if (exportingView) exportingView->logToConsole("HvMessage.c patch aplicado com sucesso.\n");
+            } else {
+                if (exportingView) exportingView->logToConsole("HvMessage.c já está compatível, nenhum patch necessário.\n");
+            }
+        } else {
+            if (exportingView) exportingView->logToConsole("Aviso: HvMessage.c não encontrado em " + targetDir.getFullPathName() + "\n");
+        }
+    }
+
+    // 3.6) Sanity-check básico das fontes Heavy no projeto ESP-IDF
+    if (exportingView)
+        exportingView->logToConsole("Iniciando (4/4) Sanity-check Heavy sources\n");
+    {
+        auto cmakeMain = File("/home/vinicius/Projects/ime-embarcados-lib/main/CMakeLists.txt");
+        if (cmakeMain.existsAsFile()) {
+            auto cmakeText = cmakeMain.loadFileAsString();
+            bool foundHevHeavy = cmakeText.contains("Heavy_heavy");
+            bool foundBinop = cmakeText.contains("HvControlBinop");
+            if (!foundHevHeavy && !foundBinop) {
+                if (exportingView) exportingView->logToConsole("Searched text for Heavy_heavy|HvControlBinop (**/main/CMakeLists.txt), no results\nCompleted (4/4) Sanity-check Heavy sources\n");
+            } else {
+                String msg = "Searched text for Heavy_heavy|HvControlBinop (**/main/CMakeLists.txt), found: ";
+                if (foundHevHeavy) msg += "Heavy_heavy ";
+                if (foundBinop) msg += "HvControlBinop ";
+                if (exportingView) exportingView->logToConsole(msg + "\n");
+            }
+        } else {
+            if (exportingView) exportingView->logToConsole("Aviso: main/CMakeLists.txt não encontrado para sanity-check.\n");
+        }
+    }
+
+    // Limpa pastas intermediárias geradas pelo hvcc (opcional)
+    outputDir.getChildFile("ir").deleteRecursively();
+    outputDir.getChildFile("hv").deleteRecursively();
+
+    // Guarda o exit code do hvcc
+    int hvccExit = getExitCode();
+
+    // 4) Prepara ambiente ESP-IDF, build e flash
+    if (exportingView)
+        exportingView->logToConsole("ESP32: sourcing ESP-IDF, build e flash...\n");
+    exportingView->showState(ExportingProgressView::Flashing);
+
+#if JUCE_WINDOWS
+    // No-op on Windows for now
+    int flashExit = 0;
+#else
+    StringArray argv;
+    argv.add("/usr/bin/zsh");
+    argv.add("-lc");
+    argv.add(". \"$HOME/esp/esp-idf/export.sh\" >/dev/null 2>&1; cd /home/vinicius/Projects/ime-embarcados-lib; idf.py build | cat; idf.py flash");
+    bool started = start(argv);
+    waitForProcessToFinish(-1);
+    exportingView->flushConsole();
+    int flashExit = started ? getExitCode() : 1;
+#endif
+
+    // Delay curto para garantir código de saída correto
+    Time::waitForMillisecondCounter(Time::getMillisecondCounter() + 300);
+
+    // Retorna falha se qualquer etapa falhar
+    return (hvccExit != 0) || (flashExit != 0);
     }
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(ESP32Exporter)
