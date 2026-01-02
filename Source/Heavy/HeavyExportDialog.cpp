@@ -56,15 +56,97 @@ private:
         placeholder.setBounds(0, 0, getWidth(), 24);
     }
 
-    bool performExport(String const& /*pdPatch*/, String const& /*outdir*/, String const& /*name*/,
-               String const& /*copyright*/, StringArray const& /*searchPaths*/) override
+    bool performExport(String const& pdPatch, String const& outdir, String const& name,
+               String const& copyright, StringArray const& searchPaths) override
     {
-        // Por ora, apenas loga um Hello World no console de exportação
-        if (exportingView)
-            exportingView->logToConsole("ESP32: hello world\n");
+        // 1) Determina um diretório de saída gravável
+        File requestedOutDir(outdir);
+        File effectiveOutDir = requestedOutDir;
+        if (!effectiveOutDir.exists() || !effectiveOutDir.isDirectory()) {
+            effectiveOutDir.createDirectory();
+        }
+        if (effectiveOutDir.isRoot() || !effectiveOutDir.hasWriteAccess()) {
+            // Fallback: ~/plugdata_esp32_exports/<name>
+            File fallbackBase = File::getSpecialLocation(File::userHomeDirectory).getChildFile("plugdata_esp32_exports");
+            fallbackBase.createDirectory();
+            effectiveOutDir = fallbackBase.getChildFile(name.isNotEmpty() ? name : "Untitled");
+            effectiveOutDir.createDirectory();
+        }
 
-        // Retorna false para indicar sucesso ao chamador
-        return false;
+        // 2) Executa hvcc com o patch selecionado, gerando saída em effectiveOutDir
+        if (exportingView)
+            exportingView->logToConsole("ESP32: executando hvcc...\nSaída: " + effectiveOutDir.getFullPathName() + "\n");
+
+#if JUCE_WINDOWS
+        auto const heavyPath = heavyExecutable.getFullPathName().replaceCharacter('\\', '/');
+#else
+        auto const heavyPath = heavyExecutable.getFullPathName();
+#endif
+
+    StringArray args = { heavyPath.quoted(), pdPatch.quoted(), "-o", effectiveOutDir.getFullPathName().quoted() };
+        args.add("-n" + name);
+
+        if (copyright.isNotEmpty()) {
+            args.add("--copyright");
+            args.add(copyright.quoted());
+        }
+
+        args.add("-v");
+        args.add("-p");
+        for (auto& path : searchPaths) {
+            args.add(path);
+        }
+
+        if (shouldQuit)
+            return true;
+
+        auto const command = args.joinIntoString(" ");
+        exportingView->logToConsole("Command: " + command + "\n");
+        Toolchain::startShellScript(command, this);
+
+        waitForProcessToFinish(-1);
+        exportingView->flushConsole();
+
+        if (shouldQuit)
+            return true;
+
+        // 3) Limpa a pasta de destino e depois copia o conteúdo
+        File outputDir = effectiveOutDir;
+        File cDir = outputDir.getChildFile("c");
+        File targetDir = File("/home/vinicius/Projects/ime-embarcados-lib/c");
+        if (exportingView)
+            exportingView->logToConsole("ESP32: limpando " + targetDir.getFullPathName() + "...\n");
+        if (targetDir.exists())
+            targetDir.deleteRecursively();
+        targetDir.createDirectory();
+
+        if (exportingView)
+            exportingView->logToConsole("ESP32: copiando conteúdo de 'c' para " + targetDir.getFullPathName() + "...\n");
+
+        if (cDir.isDirectory()) {
+            DirectoryIterator it(cDir, false, "*", File::findFilesAndDirectories);
+            while (it.next()) {
+                auto src = it.getFile();
+                auto dst = targetDir.getChildFile(src.getFileName());
+                if (src.isDirectory()) {
+                    src.copyDirectoryTo(dst);
+                } else {
+                    src.copyFileTo(dst);
+                }
+            }
+        } else {
+            if (exportingView)
+                exportingView->logToConsole("Aviso: diretório 'c' não encontrado em " + outputDir.getFullPathName() + "\n");
+        }
+
+        // Limpa pastas intermediárias geradas pelo hvcc (opcional)
+        outputDir.getChildFile("ir").deleteRecursively();
+        outputDir.getChildFile("hv").deleteRecursively();
+
+        // Delay curto para garantir código de saída correto
+        Time::waitForMillisecondCounter(Time::getMillisecondCounter() + 300);
+
+        return getExitCode();
     }
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(ESP32Exporter)
