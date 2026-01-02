@@ -195,6 +195,52 @@ private:
                 if (foundBinop) msg += "HvControlBinop ";
                 if (exportingView) exportingView->logToConsole(msg + "\n");
             }
+
+            // 3.7) Atualiza SRCS em CMakeLists.txt para incluir todos os arquivos de ../c
+            if (exportingView) exportingView->logToConsole("Atualizando CMakeLists.txt (SRCS) com fontes de ../c...\n");
+
+            int srci = cmakeText.indexOf("SRCS");
+            int incli = cmakeText.indexOf(srci + 1, "INCLUDE_DIRS");
+            if (srci >= 0 && incli > srci) {
+                String srcSection = cmakeText.substring(srci, incli);
+
+                // Coleta candidatos: todos os .c e .cpp em cDir
+                StringArray candidates;
+                if (cDir.isDirectory()) {
+                    DirectoryIterator dit(cDir, false, "*", File::findFiles);
+                    while (dit.next()) {
+                        auto f = dit.getFile();
+                        auto ext = f.getFileExtension();
+                        if (ext.equalsIgnoreCase(".c") || ext.equalsIgnoreCase(".cpp")) {
+                            candidates.add("../c/" + f.getFileName());
+                        }
+                    }
+                }
+
+                StringArray toAdd;
+                for (auto& rel : candidates) {
+                    if (! srcSection.contains(rel)) {
+                        toAdd.add(rel);
+                    }
+                }
+
+                if (toAdd.isEmpty()) {
+                    if (exportingView) exportingView->logToConsole("Nenhum novo arquivo para adicionar em SRCS.\n");
+                } else {
+                    String addBuf;
+                    for (auto& rel : toAdd) {
+                        addBuf += "         \"";
+                        addBuf += rel;
+                        addBuf += "\"\n";
+                    }
+                    // Insere antes de INCLUDE_DIRS
+                    cmakeText = cmakeText.substring(0, incli) + addBuf + cmakeText.substring(incli);
+                    cmakeMain.replaceWithText(cmakeText);
+                    if (exportingView) exportingView->logToConsole("Adicionados " + String(toAdd.size()) + " fontes hvcc ao SRCS.\n");
+                }
+            } else {
+                if (exportingView) exportingView->logToConsole("Aviso: não foi possível localizar seção SRCS/INCLUDE_DIRS em CMakeLists.txt.\n");
+            }
         } else {
             if (exportingView) exportingView->logToConsole("Aviso: main/CMakeLists.txt não encontrado para sanity-check.\n");
         }
