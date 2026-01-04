@@ -28,10 +28,13 @@ public:
         flashButton.setColour(ComboBox::outlineColourId, Colours::transparentBlack);
 
         flashButton.onClick = [this] {
-            // Use a temp hvcc outdir; we will copy into project and build/flash from there
-            auto const tempFolder = File::getSpecialLocation(File::tempDirectory).getChildFile("HeavyESP32-" + Uuid().toString().substring(10));
-            Toolchain::deleteTempFileLater(tempFolder);
-            startExport(tempFolder);
+            // Use a persistent project directory to enable incremental builds between flashes
+            auto appData = File::getSpecialLocation(File::userApplicationDataDirectory).getChildFile("plugdata").getChildFile("esp32");
+            appData.createDirectory();
+            String projName = getValue<String>(projectNameValue);
+            if (projName.isEmpty()) projName = "plugdata_esp_export";
+            auto const projFolder = appData.getChildFile(projName);
+            startExport(projFolder);
         };
     }
 
@@ -58,29 +61,147 @@ public:
     bool performExport(String const& pdPatch, String const& outdir, String const& name,
                        String const& copyright, StringArray const& searchPaths) override
     {
-        // 1) Determine hvcc output dir (writable)
-        File requestedOutDir(outdir);
-        File effectiveOutDir = requestedOutDir;
-        if (!effectiveOutDir.exists() || !effectiveOutDir.isDirectory()) {
-            effectiveOutDir.createDirectory();
-        }
-        if (effectiveOutDir.isRoot() || !effectiveOutDir.hasWriteAccess()) {
-            File fallbackBase = File::getSpecialLocation(File::userHomeDirectory).getChildFile("plugdata_esp32_exports");
-            fallbackBase.createDirectory();
-            effectiveOutDir = fallbackBase.getChildFile(name.isNotEmpty() ? name : "Untitled");
-            effectiveOutDir.createDirectory();
+        // 1) Create a temporary ESP-IDF project skeleton on-demand
+        File tempProjRoot(outdir);
+        if (! tempProjRoot.exists()) tempProjRoot.createDirectory();
+        auto projectName = String("plugdata_esp_export");
+
+        // Directories
+        File mainDir = tempProjRoot.getChildFile("main");
+        File cDir = tempProjRoot.getChildFile("c"); // hvcc will generate here
+        mainDir.createDirectory();
+        cDir.createDirectory();
+
+        // Top-level CMakeLists.txt
+        {
+            String cmakeTop;
+            cmakeTop << "cmake_minimum_required(VERSION 3.16)\n";
+            cmakeTop << "include($ENV{IDF_PATH}/tools/cmake/project.cmake)\n";
+            cmakeTop << "project(" << projectName << ")\n";
+            cmakeTop << "idf_build_set_property(MINIMAL_BUILD ON)\n";
+            tempProjRoot.getChildFile("CMakeLists.txt").replaceWithText(cmakeTop);
         }
 
-        // 2) Run hvcc to generate Heavy C (force name to Untitled for ESP-IDF alignment)
+        // main/CMakeLists.txt (glob hvcc sources)
+        {
+            String cmakeMain;
+            cmakeMain << "cmake_minimum_required(VERSION 3.16)\n\n";
+            cmakeMain << "set(srcs \"app_main.cpp\")\n";
+            cmakeMain << "file(GLOB hvcc_c \"../c/*.c\")\n";
+            cmakeMain << "file(GLOB hvcc_cpp \"../c/*.cpp\")\n";
+            cmakeMain << "list(APPEND srcs ${hvcc_c} ${hvcc_cpp})\n\n";
+            cmakeMain << "idf_component_register(\n";
+            cmakeMain << "    SRCS ${srcs}\n";
+            cmakeMain << "    INCLUDE_DIRS \".\" \"../c\"\n";
+            cmakeMain << "    REQUIRES driver esp_adc\n";
+            cmakeMain << ")\n";
+            mainDir.getChildFile("CMakeLists.txt").replaceWithText(cmakeMain);
+        }
+
+        // main/config.h and main/app_main.cpp
+        {
+            String configH;
+            configH << "#ifndef CONFIG_H\n#define CONFIG_H\n\n";
+            configH << "#include <stdint.h>\n\n";
+            configH << "static i2s_chan_handle_t tx_handle;\n\n";
+            configH << "void audio_init(uint32_t& sample_rate)\n{\n";
+            configH << "    static const i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(\n";
+            configH << "        I2S_NUM_AUTO,\n        I2S_ROLE_MASTER\n    );\n\n";
+            configH << "    static const i2s_std_config_t i2s_config = {\n";
+            configH << "        .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(sample_rate),\n";
+            configH << "        .slot_cfg = I2S_STD_MSB_SLOT_DEFAULT_CONFIG(\n";
+            configH << "            I2S_DATA_BIT_WIDTH_16BIT,\n            I2S_SLOT_MODE_STEREO\n        ),\n";
+            configH << "        .gpio_cfg = {\n";
+            configH << "            .mclk = I2S_GPIO_UNUSED,\n";
+            configH << "            .bclk = GPIO_NUM_27,\n";
+            configH << "            .ws = GPIO_NUM_26,\n";
+            configH << "            .dout = GPIO_NUM_25,\n";
+            configH << "            .din = I2S_GPIO_UNUSED,\n";
+            configH << "            .invert_flags = { .mclk_inv = false, .bclk_inv = false, .ws_inv = false },\n";
+            configH << "        },\n";
+            configH << "    };\n\n";
+            configH << "    i2s_new_channel(&chan_cfg, &tx_handle, NULL);\n";
+            configH << "    i2s_channel_init_std_mode(tx_handle, &i2s_config);\n";
+            configH << "    i2s_channel_enable(tx_handle);\n";
+            configH << "}\n\n";
+            configH << "void to_audio_write(float left_channel, float right_channel)\n{\n";
+            configH << "    int16_t L = static_cast<int16_t>(left_channel * 32767.0f * 0.5f);\n";
+            configH << "    int16_t R = static_cast<int16_t>(right_channel * 32767.0f * 0.5f);\n";
+            configH << "    int16_t buf[2] = { L, R };\n";
+            configH << "    size_t bytes = 0;\n";
+            configH << "    i2s_channel_write(tx_handle, buf, sizeof(buf), &bytes, portMAX_DELAY);\n";
+            configH << "}\n\n";
+            configH << "#endif\n";
+            mainDir.getChildFile("config.h").replaceWithText(configH);
+
+            String appMain;
+            appMain << "#include \"driver/i2s_std.h\"\n";
+            appMain << "#include \"driver/adc.h\"\n";
+            appMain << "#include \"esp_adc_cal.h\"\n";
+            appMain << "#include \"freertos/FreeRTOS.h\"\n";
+            appMain << "#include \"config.h\"\n\n";
+            appMain << "#include \"Heavy_Untitled.h\"\n\n";
+            appMain << "static uint32_t sr = 48000;\n";
+            appMain << "static HeavyContextInterface* hv_ctx = nullptr;\n\n";
+            appMain << "static const adc1_channel_t POT_ADC_CH = ADC1_CHANNEL_5;\n";
+            appMain << "static const adc_atten_t POT_ATTEN = ADC_ATTEN_DB_12;\n";
+            appMain << "static const adc_bits_width_t POT_WIDTH = ADC_WIDTH_BIT_12;\n";
+            appMain << "static const uint32_t DEFAULT_VREF_MV = 1100;\n";
+            appMain << "static esp_adc_cal_characteristics_t adc_chars;\n\n";
+            appMain << "static const char* HV_PARAM_NAME = \"Knob1\";\n";
+            appMain << "static hv_uint32_t hv_param_hash = 0;\n";
+            appMain << "static float hv_param_min = 0.0f;\n";
+            appMain << "static float hv_param_max = 1.0f;\n\n";
+            appMain << "static float pot_norm_smooth = 0.0f;\n";
+            appMain << "static const float pot_alpha = 0.1f;\n\n";
+            appMain << "static void adc_init()\n{\n";
+            appMain << "    adc1_config_width(POT_WIDTH);\n";
+            appMain << "    adc1_config_channel_atten(POT_ADC_CH, POT_ATTEN);\n";
+            appMain << "    (void) esp_adc_cal_characterize(ADC_UNIT_1, POT_ATTEN, POT_WIDTH, DEFAULT_VREF_MV, &adc_chars);\n";
+            appMain << "}\n\n";
+            appMain << "static float pot_read_norm()\n{\n";
+            appMain << "    const int samples = 16;\n";
+            appMain << "    uint32_t acc_raw = 0;\n";
+            appMain << "    for (int i = 0; i < samples; i++) acc_raw += adc1_get_raw(POT_ADC_CH);\n";
+            appMain << "    uint32_t raw = acc_raw / samples;\n";
+            appMain << "    uint32_t mv = esp_adc_cal_raw_to_voltage(raw, &adc_chars);\n";
+            appMain << "    float norm = (float)mv / 2450.0f;\n";
+            appMain << "    if (norm < 0.0f) { norm = 0.0f; }\n";
+            appMain << "    if (norm > 1.0f) { norm = 1.0f; }\n";
+            appMain << "    pot_norm_smooth += pot_alpha * (norm - pot_norm_smooth);\n";
+            appMain << "    return pot_norm_smooth;\n";
+            appMain << "}\n\n";
+            appMain << "static void audio_callback()\n{\n";
+            appMain << "    float outLR[2] = {0.f, 0.f};\n";
+            appMain << "    hv_processInlineInterleaved(hv_ctx, nullptr, outLR, 1);\n";
+            appMain << "    to_audio_write(outLR[0], outLR[1]);\n";
+            appMain << "}\n\n";
+            appMain << "extern \"C\" void app_main(void)\n{\n";
+            appMain << "    audio_init(sr);\n";
+            appMain << "    hv_ctx = hv_Untitled_new(static_cast<double>(sr));\n";
+            appMain << "    hv_param_hash = hv_stringToHash(HV_PARAM_NAME);\n";
+            appMain << "    int total = hv_getParameterInfo(hv_ctx, 0, NULL);\n";
+            appMain << "    hv_uint32_t fallback_hash = 0;\n";
+            appMain << "    for (int i = 0; i < total; i++) { HvParameterInfo info; hv_getParameterInfo(hv_ctx, i, &info);\n";
+            appMain << "        if (info.hash == hv_param_hash) { hv_param_min = info.minVal; hv_param_max = info.maxVal; fallback_hash = 0; break; }\n";
+            appMain << "        if (fallback_hash == 0 && info.type == HV_PARAM_TYPE_PARAMETER_IN) { fallback_hash = info.hash; hv_param_min = info.minVal; hv_param_max = info.maxVal; } }\n";
+            appMain << "    if (hv_param_hash == 0 && fallback_hash != 0) hv_param_hash = fallback_hash;\n";
+            appMain << "    adc_init();\n";
+            appMain << "    while (1) { static int ctr = 0; if ((ctr++ & 0xFF) == 0) { float norm = pot_read_norm(); float mapped = hv_param_min + norm * (hv_param_max - hv_param_min); if (hv_param_hash != 0) hv_sendFloatToReceiver(hv_ctx, hv_param_hash, mapped); } audio_callback(); }\n";
+            appMain << "}\n";
+            mainDir.getChildFile("app_main.cpp").replaceWithText(appMain);
+        }
+
+        // 2) Run hvcc to generate Heavy C into temp project (force name to Untitled)
         if (exportingView)
-            exportingView->logToConsole("ESP32: executando hvcc...\nSaída: " + effectiveOutDir.getFullPathName() + "\n");
+            exportingView->logToConsole("ESP32: executando hvcc...\nProjeto: " + tempProjRoot.getFullPathName() + "\n");
 
 #if JUCE_WINDOWS
         auto const heavyPath = heavyExecutable.getFullPathName().replaceCharacter('\\', '/');
 #else
         auto const heavyPath = heavyExecutable.getFullPathName();
 #endif
-        StringArray args = { heavyPath.quoted(), pdPatch.quoted(), "-o", effectiveOutDir.getFullPathName().quoted() };
+    StringArray args = { heavyPath.quoted(), pdPatch.quoted(), "-o", tempProjRoot.getFullPathName().quoted() };
         args.add("-nUntitled");
 
         if (copyright.isNotEmpty()) {
@@ -102,36 +223,8 @@ public:
         exportingView->flushConsole();
         if (shouldQuit) return true;
 
-        // 3) Copy Heavy C into ESP-IDF project
-        File outputDir = effectiveOutDir;
-        File cDir = outputDir.getChildFile("c");
-    File targetDir = File("/home/vinicius/Projects/plugdata/examples/esp/c");
-        // Only clean/copy if hvcc produced a 'c' folder with files
-        bool hvccHasFiles = false;
-        if (cDir.isDirectory()) {
-            for (auto entry : RangedDirectoryIterator(cDir, false, "*", File::findFiles)) {
-                hvccHasFiles = true; break;
-            }
-        }
-        if (! hvccHasFiles) {
-            if (exportingView)
-                exportingView->logToConsole("Aviso: sem arquivos gerados em 'c' pela hvcc; mantendo destino e seguindo.\n");
-        } else {
-            if (exportingView)
-                exportingView->logToConsole("ESP32: limpando " + targetDir.getFullPathName() + "...\n");
-            if (targetDir.exists()) targetDir.deleteRecursively();
-            targetDir.createDirectory();
-
-            if (exportingView)
-                exportingView->logToConsole("ESP32: copiando conteúdo de 'c' para " + targetDir.getFullPathName() + "...\n");
-
-            for (auto entry : RangedDirectoryIterator(cDir, false, "*", File::findFilesAndDirectories)) {
-                auto src = entry.getFile();
-                auto dst = targetDir.getChildFile(src.getFileName());
-                if (src.isDirectory()) src.copyDirectoryTo(dst);
-                else src.copyFileTo(dst);
-            }
-        }
+        // 3) Patch HvMessage.c formatting inside temp project c/
+        File targetDir = cDir;
 
         // 3.5) Patch HvMessage.c formatting
         if (exportingView) exportingView->logToConsole("Iniciando (2/4) Patch formatting if needed\n");
@@ -167,7 +260,7 @@ public:
         // 3.6) Update main/CMakeLists.txt SRCS: skip when project uses globbing
         if (exportingView) exportingView->logToConsole("Iniciando (4/4) Sanity-check Heavy sources\n");
         {
-            auto cmakeMain = File("/home/vinicius/Projects/plugdata/examples/esp/main/CMakeLists.txt");
+            auto cmakeMain = mainDir.getChildFile("CMakeLists.txt");
             if (cmakeMain.existsAsFile()) {
                 auto cmakeText = cmakeMain.loadFileAsString();
                 if (cmakeText.contains("file(GLOB hvcc_c")) {
@@ -178,7 +271,7 @@ public:
                     if (srci >= 0 && incli > srci) {
                         String srcSection = cmakeText.substring(srci, incli);
                         StringArray candidates;
-                        if (cDir.isDirectory()) {
+                        if (targetDir.isDirectory()) {
                             for (auto entry : RangedDirectoryIterator(cDir, false, "*", File::findFiles)) {
                                 auto f = entry.getFile();
                                 auto ext = f.getFileExtension();
@@ -214,31 +307,22 @@ public:
         }
 
         // Clean hvcc intermediates
-        outputDir.getChildFile("ir").deleteRecursively();
-        outputDir.getChildFile("hv").deleteRecursively();
+        tempProjRoot.getChildFile("ir").deleteRecursively();
+        tempProjRoot.getChildFile("hv").deleteRecursively();
         int hvccExit = getExitCode();
 
-    // 4) Source ESP-IDF, build and flash (prefer Ninja app-flash for speed)
-    if (exportingView) exportingView->logToConsole("ESP32: preparando ambiente e compilação rápida...\n");
+        // 4) Source ESP-IDF, build and flash the temp project
+        if (exportingView) exportingView->logToConsole("ESP32: preparando ambiente, criando build e flash do projeto temporário...\n");
     exportingView->showState(ExportingProgressView::Flashing);
 
 #if JUCE_WINDOWS
     int flashExit = 0;
 #else
-    // Use Ninja directly when build/ exists to avoid extra Python/IDF overhead.
-    // Otherwise run a single idf.py app-flash (which configures & flashes).
-    File buildDir("/home/vinicius/Projects/plugdata/examples/esp/build");
-    String shellCmd;
-    if (buildDir.isDirectory()) {
-        shellCmd = ". \"$HOME/esp/esp-idf/export.sh\" >/dev/null 2>&1; "
-               "cd /home/vinicius/Projects/plugdata/examples/esp; "
-               "ninja -C build -j $(nproc) | cat; "
-               "ninja -C build app-flash"; // flash app only for speed
-    } else {
-        shellCmd = ". \"$HOME/esp/esp-idf/export.sh\" >/dev/null 2>&1; "
-               "cd /home/vinicius/Projects/plugdata/examples/esp; "
-               "idf.py app-flash -j $(nproc)"; // config + build + app flash in one
-    }
+    // Prefer incremental builds: set IDF target via -D to avoid fullclean, enable ccache, and rely on Ninja/CMake to recompile only changed sources
+    String shellCmd = String(". \"$HOME/esp/esp-idf/export.sh\" >/dev/null 2>&1; ")
+            + "cd " + tempProjRoot.getFullPathName().quoted() + "; "
+            + "export CMAKE_BUILD_PARALLEL_LEVEL=$(nproc); "
+            + "idf.py --ccache -DIDF_TARGET=esp32 app-flash";
 
     StringArray argv;
     argv.add("/usr/bin/zsh");
@@ -250,9 +334,9 @@ public:
     int flashExit = started ? getExitCode() : 1;
 #endif
 
-        // Optional: log bin path if present
+        // Optional: log bin path if present in temp project
         {
-            File binPath("/home/vinicius/Projects/plugdata/examples/esp/build/ime-embarcados-lib.bin");
+            File binPath = tempProjRoot.getChildFile("build").getChildFile(projectName + ".bin");
             if (binPath.existsAsFile()) {
                 exportingView->logToConsole("ESP32: bin gerado: " + binPath.getFullPathName() + " (" + String(binPath.getSize()) + " bytes)\n");
             }
