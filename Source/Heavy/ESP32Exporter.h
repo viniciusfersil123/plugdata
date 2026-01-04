@@ -29,11 +29,11 @@ public:
 
         flashButton.onClick = [this] {
             // Use a persistent project directory to enable incremental builds between flashes
-            auto appData = File::getSpecialLocation(File::userApplicationDataDirectory).getChildFile("plugdata").getChildFile("esp32");
-            appData.createDirectory();
+            auto appRoot = File::getSpecialLocation(File::userApplicationDataDirectory).getChildFile("plugdata").getChildFile("esp32");
+            appRoot.createDirectory();
             String projName = getValue<String>(projectNameValue);
             if (projName.isEmpty()) projName = "plugdata_esp_export";
-            auto const projFolder = appData.getChildFile(projName);
+            auto const projFolder = appRoot.getChildFile(projName);
             startExport(projFolder);
         };
     }
@@ -61,7 +61,7 @@ public:
     bool performExport(String const& pdPatch, String const& outdir, String const& name,
                        String const& copyright, StringArray const& searchPaths) override
     {
-        // 1) Create a temporary ESP-IDF project skeleton on-demand
+    // 1) Create a temporary ESP-IDF project skeleton on-demand
         File tempProjRoot(outdir);
         if (! tempProjRoot.exists()) tempProjRoot.createDirectory();
         auto projectName = String("plugdata_esp_export");
@@ -194,7 +194,7 @@ public:
 
         // 2) Run hvcc to generate Heavy C into temp project (force name to Untitled)
         if (exportingView)
-            exportingView->logToConsole("ESP32: executando hvcc...\nProjeto: " + tempProjRoot.getFullPathName() + "\n");
+            exportingView->logToConsole("ESP32: running hvcc...\nProject: " + tempProjRoot.getFullPathName() + "\n");
 
 #if JUCE_WINDOWS
         auto const heavyPath = heavyExecutable.getFullPathName().replaceCharacter('\\', '/');
@@ -227,7 +227,7 @@ public:
         File targetDir = cDir;
 
         // 3.5) Patch HvMessage.c formatting
-        if (exportingView) exportingView->logToConsole("Iniciando (2/4) Patch formatting if needed\n");
+    if (exportingView) exportingView->logToConsole("Starting (2/4) patching HvMessage formatting if needed\n");
         {
             auto hvMessageFile = targetDir.getChildFile("HvMessage.c");
             if (hvMessageFile.existsAsFile()) {
@@ -248,23 +248,23 @@ public:
                 }
                 if (changed) {
                     hvMessageFile.replaceWithText(content);
-                    if (exportingView) exportingView->logToConsole("HvMessage.c patch aplicado com sucesso.\n");
+                    if (exportingView) exportingView->logToConsole("HvMessage.c patch applied successfully.\n");
                 } else {
-                    if (exportingView) exportingView->logToConsole("HvMessage.c já está compatível, nenhum patch necessário.\n");
+                    if (exportingView) exportingView->logToConsole("HvMessage.c already compatible, no patch needed.\n");
                 }
             } else {
-                if (exportingView) exportingView->logToConsole("Aviso: HvMessage.c não encontrado em " + targetDir.getFullPathName() + "\n");
+                if (exportingView) exportingView->logToConsole("Warning: HvMessage.c not found in " + targetDir.getFullPathName() + "\n");
             }
         }
 
         // 3.6) Update main/CMakeLists.txt SRCS: skip when project uses globbing
-        if (exportingView) exportingView->logToConsole("Iniciando (4/4) Sanity-check Heavy sources\n");
+    if (exportingView) exportingView->logToConsole("Starting (4/4) sanity-check Heavy sources\n");
         {
             auto cmakeMain = mainDir.getChildFile("CMakeLists.txt");
             if (cmakeMain.existsAsFile()) {
                 auto cmakeText = cmakeMain.loadFileAsString();
                 if (cmakeText.contains("file(GLOB hvcc_c")) {
-                    if (exportingView) exportingView->logToConsole("Detectado globbing de ../c no CMake; SRCS já sincroniza automaticamente.\n");
+                    if (exportingView) exportingView->logToConsole("Detected globbing of ../c in CMake; SRCS already sync automatically.\n");
                 } else {
                     int srci = cmakeText.indexOf("SRCS");
                     int incli = cmakeText.indexOf(srci + 1, "INCLUDE_DIRS");
@@ -285,7 +285,7 @@ public:
                             if (! srcSection.contains(rel)) toAdd.add(rel);
                         }
                         if (toAdd.isEmpty()) {
-                            if (exportingView) exportingView->logToConsole("Nenhum novo arquivo para adicionar em SRCS.\n");
+                            if (exportingView) exportingView->logToConsole("No new files to add to SRCS.\n");
                         } else {
                             String addBuf;
                             for (auto& rel : toAdd) {
@@ -295,14 +295,14 @@ public:
                             }
                             cmakeText = cmakeText.substring(0, incli) + addBuf + cmakeText.substring(incli);
                             cmakeMain.replaceWithText(cmakeText);
-                            if (exportingView) exportingView->logToConsole("Adicionados " + String(toAdd.size()) + " fontes hvcc ao SRCS.\n");
+                            if (exportingView) exportingView->logToConsole("Added " + String(toAdd.size()) + " hvcc sources to SRCS.\n");
                         }
                     } else {
-                        if (exportingView) exportingView->logToConsole("Aviso: não foi possível localizar seção SRCS/INCLUDE_DIRS em CMakeLists.txt.\n");
+                        if (exportingView) exportingView->logToConsole("Warning: could not locate SRCS/INCLUDE_DIRS section in CMakeLists.txt.\n");
                     }
                 }
             } else {
-                if (exportingView) exportingView->logToConsole("Aviso: main/CMakeLists.txt não encontrado para sanity-check.\n");
+                if (exportingView) exportingView->logToConsole("Warning: main/CMakeLists.txt not found for sanity-check.\n");
             }
         }
 
@@ -312,7 +312,7 @@ public:
         int hvccExit = getExitCode();
 
         // 4) Source ESP-IDF, build and flash the temp project
-        if (exportingView) exportingView->logToConsole("ESP32: preparando ambiente, criando build e flash do projeto temporário...\n");
+    if (exportingView) exportingView->logToConsole("ESP32: preparing environment, building and flashing temporary project...\n");
     exportingView->showState(ExportingProgressView::Flashing);
 
 #if JUCE_WINDOWS
@@ -338,12 +338,17 @@ public:
         {
             File binPath = tempProjRoot.getChildFile("build").getChildFile(projectName + ".bin");
             if (binPath.existsAsFile()) {
-                exportingView->logToConsole("ESP32: bin gerado: " + binPath.getFullPathName() + " (" + String(binPath.getSize()) + " bytes)\n");
+                exportingView->logToConsole("ESP32: generated bin: " + binPath.getFullPathName() + " (" + String(binPath.getSize()) + " bytes)\n");
             }
         }
 
+        // Keep project directory to allow incremental builds and reuse of ccache/build artifacts.
+        if (flashExit != 0) {
+            exportingView->logToConsole("Flash failed; keeping project directory for troubleshooting: " + tempProjRoot.getFullPathName() + "\n");
+        }
+
         Time::waitForMillisecondCounter(Time::getMillisecondCounter() + 300);
-        return (hvccExit != 0) || (flashExit != 0);
+    return (hvccExit != 0) || (flashExit != 0);
     }
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(ESP32Exporter)

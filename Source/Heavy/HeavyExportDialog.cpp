@@ -26,7 +26,7 @@
 #include "PdExporter.h"
 #include "WASMExporter.h"
 
-// ESP32 exporter implemented in ESP32Exportar.h
+// ESP32 exporter implemented in ESP32Exporter.h
 
 class ExporterSettingsPanel final : public Component
     , private ListBoxModel {
