@@ -36,6 +36,26 @@ public:
     // Optional frequency override
     Value dacFreqOverrideEnable = SynchronousValue(var(false));
     Value dacFreqOverrideValue = SynchronousValue(var(48000));
+    // I2S basic pins (only applies when External DAC is selected)
+    Value i2sUseMclkValue = SynchronousValue(var(false));
+    Value i2sMclkPinValue = SynchronousValue(var(0));
+    Value i2sBclkPinValue = SynchronousValue(var(27));
+    Value i2sWsPinValue = SynchronousValue(var(26));
+    Value i2sDoutPinValue = SynchronousValue(var(25));
+    Value i2sUseDinValue = SynchronousValue(var(false));
+    Value i2sDinPinValue = SynchronousValue(var(19));
+    // I2S advanced options
+    Value i2sAdvancedOptionsValue = SynchronousValue(var(false));
+    Value i2sPortValue = SynchronousValue(var(1)); // 1=Auto, 2=I2S0, 3=I2S1
+    Value i2sRoleValue = SynchronousValue(var(1)); // 1=Master, 2=Slave
+    Value i2sClockSrcValue = SynchronousValue(var(1)); // 1=Default, 2=PLL160M, 3=APLL
+    Value i2sMclkMultipleValue = SynchronousValue(var(256));
+    Value i2sDataBitWidthValue = SynchronousValue(var(16)); // 16/24/32
+    Value i2sSlotModeValue = SynchronousValue(var(2)); // 1=Mono, 2=Stereo
+    Value i2sInvertMclkValue = SynchronousValue(var(false));
+    Value i2sInvertBclkValue = SynchronousValue(var(false));
+    Value i2sInvertWsValue = SynchronousValue(var(false));
+    Value i2sWriteTimeoutMsValue = SynchronousValue(var(0)); // 0=forever
     TextButton flashButton = TextButton("Flash");
     PropertiesPanelProperty* leftPinProperty = nullptr;
     PropertiesPanelProperty* rightPinProperty = nullptr;
@@ -49,6 +69,25 @@ public:
     PropertiesPanelProperty* stagingBufferProperty = nullptr;
     PropertiesPanelProperty* freqOverrideEnableProperty = nullptr;
     PropertiesPanelProperty* freqOverrideHzProperty = nullptr;
+    // I2S UI properties
+    PropertiesPanelProperty* i2sUseMclkProperty = nullptr;
+    PropertiesPanelProperty* i2sMclkPinProperty = nullptr;
+    PropertiesPanelProperty* i2sBclkPinProperty = nullptr;
+    PropertiesPanelProperty* i2sWsPinProperty = nullptr;
+    PropertiesPanelProperty* i2sDoutPinProperty = nullptr;
+    PropertiesPanelProperty* i2sUseDinProperty = nullptr;
+    PropertiesPanelProperty* i2sDinPinProperty = nullptr;
+    PropertiesPanelProperty* i2sAdvancedToggleProperty = nullptr;
+    PropertiesPanelProperty* i2sPortProperty = nullptr;
+    PropertiesPanelProperty* i2sRoleProperty = nullptr;
+    PropertiesPanelProperty* i2sClockSrcProperty = nullptr;
+    PropertiesPanelProperty* i2sMclkMultipleProperty = nullptr;
+    PropertiesPanelProperty* i2sDataBitWidthProperty = nullptr;
+    PropertiesPanelProperty* i2sSlotModeProperty = nullptr;
+    PropertiesPanelProperty* i2sInvertMclkProperty = nullptr;
+    PropertiesPanelProperty* i2sInvertBclkProperty = nullptr;
+    PropertiesPanelProperty* i2sInvertWsProperty = nullptr;
+    PropertiesPanelProperty* i2sWriteTimeoutProperty = nullptr;
 
     ESP32Exporter(PluginEditor* editor, ExportingProgressView* exportingView)
         : ExporterBase(editor, exportingView)
@@ -84,6 +123,45 @@ public:
             properties.add(stagingBufferProperty);
             properties.add(freqOverrideEnableProperty);
             properties.add(freqOverrideHzProperty);
+            // I2S basic pins
+            i2sUseMclkProperty = new PropertiesPanel::BoolComponent("Use MCLK", i2sUseMclkValue, { "No", "Yes" });
+            i2sMclkPinProperty = new PropertiesPanel::EditableComponent<int>("MCLK pin", i2sMclkPinValue, 0, 39);
+            i2sBclkPinProperty = new PropertiesPanel::EditableComponent<int>("BCLK pin", i2sBclkPinValue, 0, 39);
+            i2sWsPinProperty = new PropertiesPanel::EditableComponent<int>("WS pin", i2sWsPinValue, 0, 39);
+            i2sDoutPinProperty = new PropertiesPanel::EditableComponent<int>("DOUT pin", i2sDoutPinValue, 0, 39);
+            i2sUseDinProperty = new PropertiesPanel::BoolComponent("Use DIN", i2sUseDinValue, { "No", "Yes" });
+            i2sDinPinProperty = new PropertiesPanel::EditableComponent<int>("DIN pin", i2sDinPinValue, 0, 39);
+            properties.add(i2sUseMclkProperty);
+            properties.add(i2sMclkPinProperty);
+            properties.add(i2sBclkPinProperty);
+            properties.add(i2sWsPinProperty);
+            properties.add(i2sDoutPinProperty);
+            properties.add(i2sUseDinProperty);
+            properties.add(i2sDinPinProperty);
+
+            // I2S advanced options
+            i2sAdvancedToggleProperty = new PropertiesPanel::BoolComponent("Advanced I2S options", i2sAdvancedOptionsValue, { "Off", "On" });
+            i2sPortProperty = new PropertiesPanel::ComboComponent("I2S Port", i2sPortValue, { "Auto", "I2S0", "I2S1" });
+            i2sRoleProperty = new PropertiesPanel::ComboComponent("Role", i2sRoleValue, { "Master", "Slave" });
+            i2sClockSrcProperty = new PropertiesPanel::ComboComponent("Clock source", i2sClockSrcValue, { "Default", "PLL_160M", "APLL" });
+            i2sMclkMultipleProperty = new PropertiesPanel::ComboComponent("MCLK multiple", i2sMclkMultipleValue, { "128", "192", "256", "384", "512", "576", "768", "1024", "1152" });
+            i2sDataBitWidthProperty = new PropertiesPanel::ComboComponent("Data bit width", i2sDataBitWidthValue, { "16", "24", "32" });
+            i2sSlotModeProperty = new PropertiesPanel::ComboComponent("Slot mode", i2sSlotModeValue, { "Mono", "Stereo" });
+            i2sInvertMclkProperty = new PropertiesPanel::BoolComponent("Invert MCLK", i2sInvertMclkValue, { "No", "Yes" });
+            i2sInvertBclkProperty = new PropertiesPanel::BoolComponent("Invert BCLK", i2sInvertBclkValue, { "No", "Yes" });
+            i2sInvertWsProperty = new PropertiesPanel::BoolComponent("Invert WS", i2sInvertWsValue, { "No", "Yes" });
+            i2sWriteTimeoutProperty = new PropertiesPanel::EditableComponent<int>("Write timeout (ms)", i2sWriteTimeoutMsValue, 0, 600000);
+            properties.add(i2sAdvancedToggleProperty);
+            properties.add(i2sPortProperty);
+            properties.add(i2sRoleProperty);
+            properties.add(i2sClockSrcProperty);
+            properties.add(i2sMclkMultipleProperty);
+            properties.add(i2sDataBitWidthProperty);
+            properties.add(i2sSlotModeProperty);
+            properties.add(i2sInvertMclkProperty);
+            properties.add(i2sInvertBclkProperty);
+            properties.add(i2sInvertWsProperty);
+            properties.add(i2sWriteTimeoutProperty);
             for (auto* property : properties) property->setPreferredHeight(28);
             panel.addSection("ESP32", properties);
         }
@@ -113,6 +191,10 @@ public:
         rightDacPinValue.addListener(this);
         advancedOptionsValue.addListener(this);
         dacFreqOverrideEnable.addListener(this);
+        // I2S listeners
+        i2sUseMclkValue.addListener(this);
+        i2sUseDinValue.addListener(this);
+        i2sAdvancedOptionsValue.addListener(this);
         // Initial enable state
         auto initVisibility = [this]() {
             bool const useDac = getValue<int>(audioOutputValue) == 1;
@@ -133,6 +215,31 @@ public:
             if (freqOverrideEnableProperty) freqOverrideEnableProperty->setVisible(advOn);
             bool const freqOn = advOn && getValue<bool>(dacFreqOverrideEnable);
             if (freqOverrideHzProperty) freqOverrideHzProperty->setVisible(freqOn);
+            // I2S visibility
+            bool const useI2S = getValue<int>(audioOutputValue) == 2;
+            auto setI2SVis = [useI2S](PropertiesPanelProperty* p){ if (p) p->setVisible(useI2S); };
+            setI2SVis(i2sUseMclkProperty);
+            bool const showMclkPin = useI2S && getValue<bool>(i2sUseMclkValue);
+            if (i2sMclkPinProperty) i2sMclkPinProperty->setVisible(showMclkPin);
+            setI2SVis(i2sBclkPinProperty);
+            setI2SVis(i2sWsPinProperty);
+            setI2SVis(i2sDoutPinProperty);
+            setI2SVis(i2sUseDinProperty);
+            bool const showDinPin = useI2S && getValue<bool>(i2sUseDinValue);
+            if (i2sDinPinProperty) i2sDinPinProperty->setVisible(showDinPin);
+            bool const i2sAdv = useI2S && getValue<bool>(i2sAdvancedOptionsValue);
+            if (i2sAdvancedToggleProperty) i2sAdvancedToggleProperty->setVisible(useI2S);
+            auto setI2SAdvVis = [i2sAdv](PropertiesPanelProperty* p){ if (p) p->setVisible(i2sAdv); };
+            setI2SAdvVis(i2sPortProperty);
+            setI2SAdvVis(i2sRoleProperty);
+            setI2SAdvVis(i2sClockSrcProperty);
+            setI2SAdvVis(i2sMclkMultipleProperty);
+            setI2SAdvVis(i2sDataBitWidthProperty);
+            setI2SAdvVis(i2sSlotModeProperty);
+            setI2SAdvVis(i2sInvertMclkProperty);
+            setI2SAdvVis(i2sInvertBclkProperty);
+            setI2SAdvVis(i2sInvertWsProperty);
+            setI2SAdvVis(i2sWriteTimeoutProperty);
             panel.updatePropHolderLayout();
         };
         initVisibility();
@@ -162,6 +269,25 @@ public:
         stateTree.setProperty("dacStagingBufferValue", getValue<int>(dacStagingBufferValue), nullptr);
         stateTree.setProperty("dacFreqOverrideEnable", getValue<bool>(dacFreqOverrideEnable), nullptr);
         stateTree.setProperty("dacFreqOverrideValue", getValue<int>(dacFreqOverrideValue), nullptr);
+        // I2S
+        stateTree.setProperty("i2sUseMclkValue", getValue<bool>(i2sUseMclkValue), nullptr);
+        stateTree.setProperty("i2sMclkPinValue", getValue<int>(i2sMclkPinValue), nullptr);
+        stateTree.setProperty("i2sBclkPinValue", getValue<int>(i2sBclkPinValue), nullptr);
+        stateTree.setProperty("i2sWsPinValue", getValue<int>(i2sWsPinValue), nullptr);
+        stateTree.setProperty("i2sDoutPinValue", getValue<int>(i2sDoutPinValue), nullptr);
+        stateTree.setProperty("i2sUseDinValue", getValue<bool>(i2sUseDinValue), nullptr);
+        stateTree.setProperty("i2sDinPinValue", getValue<int>(i2sDinPinValue), nullptr);
+        stateTree.setProperty("i2sAdvancedOptionsValue", getValue<bool>(i2sAdvancedOptionsValue), nullptr);
+        stateTree.setProperty("i2sPortValue", getValue<int>(i2sPortValue), nullptr);
+        stateTree.setProperty("i2sRoleValue", getValue<int>(i2sRoleValue), nullptr);
+        stateTree.setProperty("i2sClockSrcValue", getValue<int>(i2sClockSrcValue), nullptr);
+        stateTree.setProperty("i2sMclkMultipleValue", getValue<int>(i2sMclkMultipleValue), nullptr);
+        stateTree.setProperty("i2sDataBitWidthValue", getValue<int>(i2sDataBitWidthValue), nullptr);
+        stateTree.setProperty("i2sSlotModeValue", getValue<int>(i2sSlotModeValue), nullptr);
+        stateTree.setProperty("i2sInvertMclkValue", getValue<bool>(i2sInvertMclkValue), nullptr);
+        stateTree.setProperty("i2sInvertBclkValue", getValue<bool>(i2sInvertBclkValue), nullptr);
+        stateTree.setProperty("i2sInvertWsValue", getValue<bool>(i2sInvertWsValue), nullptr);
+        stateTree.setProperty("i2sWriteTimeoutMsValue", getValue<int>(i2sWriteTimeoutMsValue), nullptr);
         return stateTree;
     }
 
@@ -187,13 +313,32 @@ public:
     if (tree.hasProperty("dacStagingBufferValue")) dacStagingBufferValue = tree.getProperty("dacStagingBufferValue");
     if (tree.hasProperty("dacFreqOverrideEnable")) dacFreqOverrideEnable = tree.getProperty("dacFreqOverrideEnable");
     if (tree.hasProperty("dacFreqOverrideValue")) dacFreqOverrideValue = tree.getProperty("dacFreqOverrideValue");
+        // I2S
+        if (tree.hasProperty("i2sUseMclkValue")) i2sUseMclkValue = tree.getProperty("i2sUseMclkValue");
+        if (tree.hasProperty("i2sMclkPinValue")) i2sMclkPinValue = tree.getProperty("i2sMclkPinValue");
+        if (tree.hasProperty("i2sBclkPinValue")) i2sBclkPinValue = tree.getProperty("i2sBclkPinValue");
+        if (tree.hasProperty("i2sWsPinValue")) i2sWsPinValue = tree.getProperty("i2sWsPinValue");
+        if (tree.hasProperty("i2sDoutPinValue")) i2sDoutPinValue = tree.getProperty("i2sDoutPinValue");
+        if (tree.hasProperty("i2sUseDinValue")) i2sUseDinValue = tree.getProperty("i2sUseDinValue");
+        if (tree.hasProperty("i2sDinPinValue")) i2sDinPinValue = tree.getProperty("i2sDinPinValue");
+        if (tree.hasProperty("i2sAdvancedOptionsValue")) i2sAdvancedOptionsValue = tree.getProperty("i2sAdvancedOptionsValue");
+        if (tree.hasProperty("i2sPortValue")) i2sPortValue = tree.getProperty("i2sPortValue");
+        if (tree.hasProperty("i2sRoleValue")) i2sRoleValue = tree.getProperty("i2sRoleValue");
+        if (tree.hasProperty("i2sClockSrcValue")) i2sClockSrcValue = tree.getProperty("i2sClockSrcValue");
+        if (tree.hasProperty("i2sMclkMultipleValue")) i2sMclkMultipleValue = tree.getProperty("i2sMclkMultipleValue");
+        if (tree.hasProperty("i2sDataBitWidthValue")) i2sDataBitWidthValue = tree.getProperty("i2sDataBitWidthValue");
+        if (tree.hasProperty("i2sSlotModeValue")) i2sSlotModeValue = tree.getProperty("i2sSlotModeValue");
+        if (tree.hasProperty("i2sInvertMclkValue")) i2sInvertMclkValue = tree.getProperty("i2sInvertMclkValue");
+        if (tree.hasProperty("i2sInvertBclkValue")) i2sInvertBclkValue = tree.getProperty("i2sInvertBclkValue");
+        if (tree.hasProperty("i2sInvertWsValue")) i2sInvertWsValue = tree.getProperty("i2sInvertWsValue");
+        if (tree.hasProperty("i2sWriteTimeoutMsValue")) i2sWriteTimeoutMsValue = tree.getProperty("i2sWriteTimeoutMsValue");
     }
 
     void valueChanged(Value& v) override {
         // Preserve base behavior (patch selection etc.)
         ExporterBase::valueChanged(v);
 
-        // Show/hide sections based on audio output and advanced toggle
+        // Show/hide sections based on audio output and advanced toggles
         if (leftPinProperty && rightPinProperty) {
             bool const useDac = getValue<int>(audioOutputValue) == 1;
             leftPinProperty->setVisible(useDac);
@@ -214,6 +359,33 @@ public:
             if (freqOverrideEnableProperty) freqOverrideEnableProperty->setVisible(advOn);
             bool const freqOn = advOn && getValue<bool>(dacFreqOverrideEnable);
             if (freqOverrideHzProperty) freqOverrideHzProperty->setVisible(freqOn);
+        }
+        // I2S visibility changes
+        if (i2sUseMclkProperty || i2sBclkPinProperty) {
+            bool const useI2S = getValue<int>(audioOutputValue) == 2;
+            auto setI2SVis = [useI2S](PropertiesPanelProperty* p){ if (p) p->setVisible(useI2S); };
+            setI2SVis(i2sUseMclkProperty);
+            bool const showMclkPin = useI2S && getValue<bool>(i2sUseMclkValue);
+            if (i2sMclkPinProperty) i2sMclkPinProperty->setVisible(showMclkPin);
+            setI2SVis(i2sBclkPinProperty);
+            setI2SVis(i2sWsPinProperty);
+            setI2SVis(i2sDoutPinProperty);
+            setI2SVis(i2sUseDinProperty);
+            bool const showDinPin = useI2S && getValue<bool>(i2sUseDinValue);
+            if (i2sDinPinProperty) i2sDinPinProperty->setVisible(showDinPin);
+            bool const i2sAdv = useI2S && getValue<bool>(i2sAdvancedOptionsValue);
+            if (i2sAdvancedToggleProperty) i2sAdvancedToggleProperty->setVisible(useI2S);
+            auto setI2SAdvVis = [i2sAdv](PropertiesPanelProperty* p){ if (p) p->setVisible(i2sAdv); };
+            setI2SAdvVis(i2sPortProperty);
+            setI2SAdvVis(i2sRoleProperty);
+            setI2SAdvVis(i2sClockSrcProperty);
+            setI2SAdvVis(i2sMclkMultipleProperty);
+            setI2SAdvVis(i2sDataBitWidthProperty);
+            setI2SAdvVis(i2sSlotModeProperty);
+            setI2SAdvVis(i2sInvertMclkProperty);
+            setI2SAdvVis(i2sInvertBclkProperty);
+            setI2SAdvVis(i2sInvertWsProperty);
+            setI2SAdvVis(i2sWriteTimeoutProperty);
         }
         panel.updatePropHolderLayout();
 
@@ -346,28 +518,59 @@ public:
                 configH << "}\n\n";
                 configH << "#endif\n";
             } else {
-                // External DAC via I2S (existing behaviour)
+                // External DAC via I2S with configurable pins and advanced options
                 configH << "#ifndef CONFIG_H\n#define CONFIG_H\n\n";
                 configH << "#include <stdint.h>\n\n";
                 configH << "static i2s_chan_handle_t tx_handle;\n\n";
                 configH << "void audio_init(uint32_t& sample_rate)\n{\n";
-                configH << "    static const i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(\n";
-                configH << "        I2S_NUM_AUTO,\n        I2S_ROLE_MASTER\n    );\n\n";
-                configH << "    static const i2s_std_config_t i2s_config = {\n";
-                configH << "        .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(sample_rate),\n";
-                configH << "        .slot_cfg = I2S_STD_MSB_SLOT_DEFAULT_CONFIG(\n";
-                configH << "            I2S_DATA_BIT_WIDTH_16BIT,\n            I2S_SLOT_MODE_STEREO\n        ),\n";
-                configH << "        .gpio_cfg = {\n";
-                configH << "            .mclk = I2S_GPIO_UNUSED,\n";
-                configH << "            .bclk = GPIO_NUM_27,\n";
-                configH << "            .ws = GPIO_NUM_26,\n";
-                configH << "            .dout = GPIO_NUM_25,\n";
-                configH << "            .din = I2S_GPIO_UNUSED,\n";
-                configH << "            .invert_flags = { .mclk_inv = false, .bclk_inv = false, .ws_inv = false },\n";
-                configH << "        },\n";
-                configH << "    };\n\n";
+                // Channel config
+                int portSel = getValue<int>(i2sPortValue);
+                String portConst = (portSel == 2 ? "I2S_NUM_0" : (portSel == 3 ? "I2S_NUM_1" : "I2S_NUM_AUTO"));
+                int roleSel = getValue<int>(i2sRoleValue);
+                String roleConst = (roleSel == 2 ? "I2S_ROLE_SLAVE" : "I2S_ROLE_MASTER");
+                configH << "    i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(" << portConst << ", " << roleConst << ");\n\n";
                 configH << "    i2s_new_channel(&chan_cfg, &tx_handle, NULL);\n";
-                configH << "    i2s_channel_init_std_mode(tx_handle, &i2s_config);\n";
+                // Standard config
+                // Build default structs then override from advanced options
+                int dbw = getValue<int>(i2sDataBitWidthValue);
+                String dbwConst = (dbw == 32 ? "I2S_DATA_BIT_WIDTH_32BIT" : (dbw == 24 ? "I2S_DATA_BIT_WIDTH_24BIT" : "I2S_DATA_BIT_WIDTH_16BIT"));
+                int slotModeSel = getValue<int>(i2sSlotModeValue);
+                String slotModeConst = (slotModeSel == 1 ? "I2S_SLOT_MODE_MONO" : "I2S_SLOT_MODE_STEREO");
+                configH << "    i2s_std_config_t i2s_config = {\n";
+                configH << "        .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(sample_rate),\n";
+                configH << "        .slot_cfg = I2S_STD_MSB_SLOT_DEFAULT_CONFIG(" << dbwConst << ", " << slotModeConst << "),\n";
+                // GPIO pins
+                bool useMclk = getValue<bool>(i2sUseMclkValue);
+                int mclkPin = getValue<int>(i2sMclkPinValue);
+                int bclkPin = getValue<int>(i2sBclkPinValue);
+                int wsPin = getValue<int>(i2sWsPinValue);
+                int doutPin = getValue<int>(i2sDoutPinValue);
+                bool useDin = getValue<bool>(i2sUseDinValue);
+                int dinPin = getValue<int>(i2sDinPinValue);
+                bool invM = getValue<bool>(i2sInvertMclkValue);
+                bool invB = getValue<bool>(i2sInvertBclkValue);
+                bool invW = getValue<bool>(i2sInvertWsValue);
+                configH << "        .gpio_cfg = {\n";
+                configH << "            .mclk = " << (useMclk ? (String("GPIO_NUM_") + String(mclkPin)) : String("I2S_GPIO_UNUSED")) << ",\n";
+                configH << "            .bclk = GPIO_NUM_" << String(bclkPin) << ",\n";
+                configH << "            .ws = GPIO_NUM_" << String(wsPin) << ",\n";
+                configH << "            .dout = GPIO_NUM_" << String(doutPin) << ",\n";
+                configH << "            .din = " << (useDin ? (String("GPIO_NUM_") + String(dinPin)) : String("I2S_GPIO_UNUSED")) << ",\n";
+                configH << "            .invert_flags = { .mclk_inv = " << (invM ? "true" : "false") << ", .bclk_inv = " << (invB ? "true" : "false") << ", .ws_inv = " << (invW ? "true" : "false") << " },\n";
+                configH << "        },\n";
+                configH << "    };\n";
+                // Override clock source and mclk multiple if advanced is enabled
+                bool i2sAdv = getValue<bool>(i2sAdvancedOptionsValue);
+                if (i2sAdv) {
+                    int clkSel = getValue<int>(i2sClockSrcValue);
+                    String clkSrcConst = (clkSel == 3 ? "I2S_CLK_SRC_APLL" : (clkSel == 2 ? "I2S_CLK_SRC_PLL_160M" : "I2S_CLK_SRC_DEFAULT"));
+                    int mult = getValue<int>(i2sMclkMultipleValue);
+                    String multConst;
+                    if (mult == 128) multConst = "I2S_MCLK_MULTIPLE_128"; else if (mult == 192) multConst = "I2S_MCLK_MULTIPLE_192"; else if (mult == 256) multConst = "I2S_MCLK_MULTIPLE_256"; else if (mult == 384) multConst = "I2S_MCLK_MULTIPLE_384"; else if (mult == 512) multConst = "I2S_MCLK_MULTIPLE_512"; else if (mult == 576) multConst = "I2S_MCLK_MULTIPLE_576"; else if (mult == 768) multConst = "I2S_MCLK_MULTIPLE_768"; else if (mult == 1024) multConst = "I2S_MCLK_MULTIPLE_1024"; else multConst = "I2S_MCLK_MULTIPLE_1152";
+                    configH << "    i2s_config.clk_cfg.clk_src = " << clkSrcConst << ";\n";
+                    configH << "    i2s_config.clk_cfg.mclk_multiple = " << multConst << ";\n";
+                }
+                configH << "\n    i2s_channel_init_std_mode(tx_handle, &i2s_config);\n";
                 configH << "    i2s_channel_enable(tx_handle);\n";
                 configH << "}\n\n";
                 configH << "void to_audio_write(float left_channel, float right_channel)\n{\n";
@@ -375,7 +578,9 @@ public:
                 configH << "    int16_t R = static_cast<int16_t>(right_channel * 32767.0f * 0.5f);\n";
                 configH << "    int16_t buf[2] = { L, R };\n";
                 configH << "    size_t bytes = 0;\n";
-                configH << "    i2s_channel_write(tx_handle, buf, sizeof(buf), &bytes, portMAX_DELAY);\n";
+                int wt = getValue<int>(i2sWriteTimeoutMsValue);
+                String wtExpr = (wt <= 0 ? String("portMAX_DELAY") : String(wt));
+                configH << "    i2s_channel_write(tx_handle, buf, sizeof(buf), &bytes, " << wtExpr << ");\n";
                 configH << "}\n\n";
                 configH << "#endif\n";
             }
