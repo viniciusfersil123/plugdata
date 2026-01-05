@@ -106,9 +106,13 @@ void PropertiesPanel::SectionComponent::paintOverChildren(Graphics& g)
     auto [x, width] = parent.getContentXAndWidth();
     
     g.setColour(findColour(PlugDataColour::toolbarOutlineColourId));
-    
-    for (int i = 0; i < propertyComponents.size() - 1; i++) {
-        auto const y = propertyComponents[i]->getBottom() + padding;
+    // Draw separators only between visible properties
+    Array<PropertiesPanelProperty*> visibleProps;
+    for (auto* pc : propertyComponents) {
+        if (pc->isVisible()) visibleProps.add(pc);
+    }
+    for (int i = 0; i < visibleProps.size() - 1; i++) {
+        auto const y = visibleProps[i]->getBottom() + padding;
         g.drawHorizontalLine(y, x + 10, x + width - 10);
     }
 }
@@ -120,6 +124,7 @@ void PropertiesPanel::SectionComponent::resized()
     auto [x, width] = parent.getContentXAndWidth();
     
     for (auto* propertyComponent : propertyComponents) {
+        if (!propertyComponent->isVisible()) continue;
         propertyComponent->setBounds(x, y, width, propertyComponent->getPreferredHeight());
         y = propertyComponent->getBottom() + padding;
     }
@@ -136,13 +141,16 @@ int PropertiesPanel::SectionComponent::getPreferredHeight() const
     auto const title = getName();
     auto y = title.isNotEmpty() ? parent.titleHeight : 0;
     
-    auto const numComponents = propertyComponents.size();
-    
-    if (numComponents > 0) {
-        for (auto const* propertyComponent : propertyComponents)
+    // Only count visible components
+    int numVisible = 0;
+    for (auto const* propertyComponent : propertyComponents) {
+        if (propertyComponent->isVisible()) {
             y += propertyComponent->getPreferredHeight();
-        
-        y += (numComponents - 1) * padding;
+            numVisible++;
+        }
+    }
+    if (numVisible > 0) {
+        y += (numVisible - 1) * padding;
     }
     
     return y + (title.isNotEmpty() ? 16 : 0);

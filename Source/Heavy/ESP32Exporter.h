@@ -13,11 +13,81 @@
 
 class ESP32Exporter final : public ExporterBase {
 public:
+    // Audio output selection: 1 = ESP32 DAC, 2 = External DAC
+    Value audioOutputValue = SynchronousValue(var(1));
+    // DAC pin selection (only applies when ESP32 DAC is selected)
+    // 1 = GPIO25 (DAC CH0), 2 = GPIO26 (DAC CH1)
+    Value leftDacPinValue = SynchronousValue(var(1));
+    Value rightDacPinValue = SynchronousValue(var(2));
+    // Advanced DAC options (collapsed by default)
+    Value advancedOptionsValue = SynchronousValue(var(false));
+    // Advanced parameters with defaults matching current implementation
+    Value dacDescNumValue = SynchronousValue(var(4));
+    Value dacBufSizeValue = SynchronousValue(var(512));
+    Value dacOffsetValue = SynchronousValue(var(0));
+    // 1 = DEFAULT, 2 = APLL
+    Value dacClkSrcValue = SynchronousValue(var(1));
+    // 1 = Alternating, 2 = Simultaneous
+    Value dacChanModeValue = SynchronousValue(var(1));
+    // Write timeout in ticks (-1 for blocking)
+    Value dacWriteTimeoutValue = SynchronousValue(var(-1));
+    // Staging buffer size for s_dac_buf
+    Value dacStagingBufferValue = SynchronousValue(var(256));
+    // Optional frequency override
+    Value dacFreqOverrideEnable = SynchronousValue(var(false));
+    Value dacFreqOverrideValue = SynchronousValue(var(48000));
     TextButton flashButton = TextButton("Flash");
+    PropertiesPanelProperty* leftPinProperty = nullptr;
+    PropertiesPanelProperty* rightPinProperty = nullptr;
+    PropertiesPanelProperty* advancedToggleProperty = nullptr;
+    PropertiesPanelProperty* descNumProperty = nullptr;
+    PropertiesPanelProperty* bufSizeProperty = nullptr;
+    PropertiesPanelProperty* offsetProperty = nullptr;
+    PropertiesPanelProperty* clkSrcProperty = nullptr;
+    PropertiesPanelProperty* chanModeProperty = nullptr;
+    PropertiesPanelProperty* writeTimeoutProperty = nullptr;
+    PropertiesPanelProperty* stagingBufferProperty = nullptr;
+    PropertiesPanelProperty* freqOverrideEnableProperty = nullptr;
+    PropertiesPanelProperty* freqOverrideHzProperty = nullptr;
 
     ESP32Exporter(PluginEditor* editor, ExportingProgressView* exportingView)
         : ExporterBase(editor, exportingView)
     {
+        // ESP32-specific options section
+        {
+            PropertiesArray properties;
+            properties.add(new PropertiesPanel::ComboComponent("Audio Output", audioOutputValue, { "ESP32 DAC", "External DAC" }));
+            leftPinProperty = new PropertiesPanel::ComboComponent("Left pin (DAC)", leftDacPinValue, { "GPIO25 (CH0)", "GPIO26 (CH1)" });
+            rightPinProperty = new PropertiesPanel::ComboComponent("Right pin (DAC)", rightDacPinValue, { "GPIO25 (CH0)", "GPIO26 (CH1)" });
+            properties.add(leftPinProperty);
+            properties.add(rightPinProperty);
+            // Advanced options toggle and fields
+            advancedToggleProperty = new PropertiesPanel::BoolComponent("Advanced DAC options", advancedOptionsValue, { "Off", "On" });
+            properties.add(advancedToggleProperty);
+
+            descNumProperty = new PropertiesPanel::EditableComponent<int>("Descriptors (desc_num)", dacDescNumValue, 1, 64);
+            bufSizeProperty = new PropertiesPanel::EditableComponent<int>("Buffer size (bytes)", dacBufSizeValue, 32, 8192);
+            offsetProperty = new PropertiesPanel::EditableComponent<int>("Offset", dacOffsetValue, 0, 255);
+            clkSrcProperty = new PropertiesPanel::ComboComponent("Clock source", dacClkSrcValue, { "DEFAULT", "APLL" });
+            chanModeProperty = new PropertiesPanel::ComboComponent("Channel mode", dacChanModeValue, { "Alternating", "Simultaneous" });
+            writeTimeoutProperty = new PropertiesPanel::EditableComponent<int>("Write timeout (ticks)", dacWriteTimeoutValue, -1, 10000);
+            stagingBufferProperty = new PropertiesPanel::EditableComponent<int>("Staging buffer (bytes)", dacStagingBufferValue, 32, 8192);
+            freqOverrideEnableProperty = new PropertiesPanel::BoolComponent("Override frequency", dacFreqOverrideEnable, { "No", "Yes" });
+            freqOverrideHzProperty = new PropertiesPanel::EditableComponent<int>("Frequency (Hz)", dacFreqOverrideValue, 8000, 192000);
+
+            properties.add(descNumProperty);
+            properties.add(bufSizeProperty);
+            properties.add(offsetProperty);
+            properties.add(clkSrcProperty);
+            properties.add(chanModeProperty);
+            properties.add(writeTimeoutProperty);
+            properties.add(stagingBufferProperty);
+            properties.add(freqOverrideEnableProperty);
+            properties.add(freqOverrideHzProperty);
+            for (auto* property : properties) property->setPreferredHeight(28);
+            panel.addSection("ESP32", properties);
+        }
+
         // Simplified panel: only a Flash button
         exportButton.setVisible(false);
         addAndMakeVisible(flashButton);
@@ -36,6 +106,36 @@ public:
             auto const projFolder = appRoot.getChildFile(projName);
             startExport(projFolder);
         };
+
+        // Listen for changes to visibility/validate pin choices and advanced options
+        audioOutputValue.addListener(this);
+        leftDacPinValue.addListener(this);
+        rightDacPinValue.addListener(this);
+        advancedOptionsValue.addListener(this);
+        dacFreqOverrideEnable.addListener(this);
+        // Initial enable state
+        auto initVisibility = [this]() {
+            bool const useDac = getValue<int>(audioOutputValue) == 1;
+            bool const advOn = useDac && getValue<bool>(advancedOptionsValue);
+            if (leftPinProperty && rightPinProperty) {
+                leftPinProperty->setVisible(useDac);
+                rightPinProperty->setVisible(useDac);
+            }
+            if (advancedToggleProperty) advancedToggleProperty->setVisible(useDac);
+            auto setAdvVis = [advOn](PropertiesPanelProperty* p){ if (p) p->setVisible(advOn); };
+            setAdvVis(descNumProperty);
+            setAdvVis(bufSizeProperty);
+            setAdvVis(offsetProperty);
+            setAdvVis(clkSrcProperty);
+            setAdvVis(chanModeProperty);
+            setAdvVis(writeTimeoutProperty);
+            setAdvVis(stagingBufferProperty);
+            if (freqOverrideEnableProperty) freqOverrideEnableProperty->setVisible(advOn);
+            bool const freqOn = advOn && getValue<bool>(dacFreqOverrideEnable);
+            if (freqOverrideHzProperty) freqOverrideHzProperty->setVisible(freqOn);
+            panel.updatePropHolderLayout();
+        };
+        initVisibility();
     }
 
     void resized() override {
@@ -48,6 +148,20 @@ public:
         stateTree.setProperty("inputPatchValue", getValue<String>(inputPatchValue), nullptr);
         stateTree.setProperty("projectNameValue", getValue<String>(projectNameValue), nullptr);
         stateTree.setProperty("projectCopyrightValue", getValue<String>(projectCopyrightValue), nullptr);
+        stateTree.setProperty("audioOutputValue", getValue<int>(audioOutputValue), nullptr);
+        stateTree.setProperty("leftDacPinValue", getValue<int>(leftDacPinValue), nullptr);
+        stateTree.setProperty("rightDacPinValue", getValue<int>(rightDacPinValue), nullptr);
+        // Advanced
+        stateTree.setProperty("advancedOptionsValue", getValue<bool>(advancedOptionsValue), nullptr);
+        stateTree.setProperty("dacDescNumValue", getValue<int>(dacDescNumValue), nullptr);
+        stateTree.setProperty("dacBufSizeValue", getValue<int>(dacBufSizeValue), nullptr);
+        stateTree.setProperty("dacOffsetValue", getValue<int>(dacOffsetValue), nullptr);
+        stateTree.setProperty("dacClkSrcValue", getValue<int>(dacClkSrcValue), nullptr);
+        stateTree.setProperty("dacChanModeValue", getValue<int>(dacChanModeValue), nullptr);
+        stateTree.setProperty("dacWriteTimeoutValue", getValue<int>(dacWriteTimeoutValue), nullptr);
+        stateTree.setProperty("dacStagingBufferValue", getValue<int>(dacStagingBufferValue), nullptr);
+        stateTree.setProperty("dacFreqOverrideEnable", getValue<bool>(dacFreqOverrideEnable), nullptr);
+        stateTree.setProperty("dacFreqOverrideValue", getValue<int>(dacFreqOverrideValue), nullptr);
         return stateTree;
     }
 
@@ -56,6 +170,64 @@ public:
         inputPatchValue = tree.getProperty("inputPatchValue");
         projectNameValue = tree.getProperty("projectNameValue");
         projectCopyrightValue = tree.getProperty("projectCopyrightValue");
+        if (tree.hasProperty("audioOutputValue"))
+            audioOutputValue = tree.getProperty("audioOutputValue");
+        if (tree.hasProperty("leftDacPinValue"))
+            leftDacPinValue = tree.getProperty("leftDacPinValue");
+        if (tree.hasProperty("rightDacPinValue"))
+            rightDacPinValue = tree.getProperty("rightDacPinValue");
+    // Advanced
+    if (tree.hasProperty("advancedOptionsValue")) advancedOptionsValue = tree.getProperty("advancedOptionsValue");
+    if (tree.hasProperty("dacDescNumValue")) dacDescNumValue = tree.getProperty("dacDescNumValue");
+    if (tree.hasProperty("dacBufSizeValue")) dacBufSizeValue = tree.getProperty("dacBufSizeValue");
+    if (tree.hasProperty("dacOffsetValue")) dacOffsetValue = tree.getProperty("dacOffsetValue");
+    if (tree.hasProperty("dacClkSrcValue")) dacClkSrcValue = tree.getProperty("dacClkSrcValue");
+    if (tree.hasProperty("dacChanModeValue")) dacChanModeValue = tree.getProperty("dacChanModeValue");
+    if (tree.hasProperty("dacWriteTimeoutValue")) dacWriteTimeoutValue = tree.getProperty("dacWriteTimeoutValue");
+    if (tree.hasProperty("dacStagingBufferValue")) dacStagingBufferValue = tree.getProperty("dacStagingBufferValue");
+    if (tree.hasProperty("dacFreqOverrideEnable")) dacFreqOverrideEnable = tree.getProperty("dacFreqOverrideEnable");
+    if (tree.hasProperty("dacFreqOverrideValue")) dacFreqOverrideValue = tree.getProperty("dacFreqOverrideValue");
+    }
+
+    void valueChanged(Value& v) override {
+        // Preserve base behavior (patch selection etc.)
+        ExporterBase::valueChanged(v);
+
+        // Show/hide sections based on audio output and advanced toggle
+        if (leftPinProperty && rightPinProperty) {
+            bool const useDac = getValue<int>(audioOutputValue) == 1;
+            leftPinProperty->setVisible(useDac);
+            rightPinProperty->setVisible(useDac);
+        }
+        if (advancedToggleProperty || descNumProperty) {
+            bool const useDac = getValue<int>(audioOutputValue) == 1;
+            bool const advOn = useDac && getValue<bool>(advancedOptionsValue);
+            if (advancedToggleProperty) advancedToggleProperty->setVisible(useDac);
+            auto setAdvVis = [advOn](PropertiesPanelProperty* p){ if (p) p->setVisible(advOn); };
+            setAdvVis(descNumProperty);
+            setAdvVis(bufSizeProperty);
+            setAdvVis(offsetProperty);
+            setAdvVis(clkSrcProperty);
+            setAdvVis(chanModeProperty);
+            setAdvVis(writeTimeoutProperty);
+            setAdvVis(stagingBufferProperty);
+            if (freqOverrideEnableProperty) freqOverrideEnableProperty->setVisible(advOn);
+            bool const freqOn = advOn && getValue<bool>(dacFreqOverrideEnable);
+            if (freqOverrideHzProperty) freqOverrideHzProperty->setVisible(freqOn);
+        }
+        panel.updatePropHolderLayout();
+
+        // Ensure left/right aren't the same channel when DAC is used
+        if (v.refersToSameSourceAs(leftDacPinValue) || v.refersToSameSourceAs(rightDacPinValue) || v.refersToSameSourceAs(audioOutputValue)) {
+            if (getValue<int>(audioOutputValue) == 1) {
+                int left = getValue<int>(leftDacPinValue);
+                int right = getValue<int>(rightDacPinValue);
+                if (left == right) {
+                    // Flip the right channel to the other pin
+                    rightDacPinValue = (left == 1 ? 2 : 1);
+                }
+            }
+        }
     }
 
     bool performExport(String const& pdPatch, String const& outdir, String const& name,
@@ -93,6 +265,8 @@ public:
             cmakeMain << "idf_component_register(\n";
             cmakeMain << "    SRCS ${srcs}\n";
             cmakeMain << "    INCLUDE_DIRS \".\" \"../c\"\n";
+            // Rely on core 'driver' component for DAC continuous on ESP32.
+            // Some ESP-IDF versions package DAC as an external 'esp_driver_dac' component; if needed, users can add it via idf.py add-dependency.
             cmakeMain << "    REQUIRES driver esp_adc\n";
             cmakeMain << ")\n";
             mainDir.getChildFile("CMakeLists.txt").replaceWithText(cmakeMain);
@@ -101,37 +275,110 @@ public:
         // main/config.h and main/app_main.cpp
         {
             String configH;
-            configH << "#ifndef CONFIG_H\n#define CONFIG_H\n\n";
-            configH << "#include <stdint.h>\n\n";
-            configH << "static i2s_chan_handle_t tx_handle;\n\n";
-            configH << "void audio_init(uint32_t& sample_rate)\n{\n";
-            configH << "    static const i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(\n";
-            configH << "        I2S_NUM_AUTO,\n        I2S_ROLE_MASTER\n    );\n\n";
-            configH << "    static const i2s_std_config_t i2s_config = {\n";
-            configH << "        .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(sample_rate),\n";
-            configH << "        .slot_cfg = I2S_STD_MSB_SLOT_DEFAULT_CONFIG(\n";
-            configH << "            I2S_DATA_BIT_WIDTH_16BIT,\n            I2S_SLOT_MODE_STEREO\n        ),\n";
-            configH << "        .gpio_cfg = {\n";
-            configH << "            .mclk = I2S_GPIO_UNUSED,\n";
-            configH << "            .bclk = GPIO_NUM_27,\n";
-            configH << "            .ws = GPIO_NUM_26,\n";
-            configH << "            .dout = GPIO_NUM_25,\n";
-            configH << "            .din = I2S_GPIO_UNUSED,\n";
-            configH << "            .invert_flags = { .mclk_inv = false, .bclk_inv = false, .ws_inv = false },\n";
-            configH << "        },\n";
-            configH << "    };\n\n";
-            configH << "    i2s_new_channel(&chan_cfg, &tx_handle, NULL);\n";
-            configH << "    i2s_channel_init_std_mode(tx_handle, &i2s_config);\n";
-            configH << "    i2s_channel_enable(tx_handle);\n";
-            configH << "}\n\n";
-            configH << "void to_audio_write(float left_channel, float right_channel)\n{\n";
-            configH << "    int16_t L = static_cast<int16_t>(left_channel * 32767.0f * 0.5f);\n";
-            configH << "    int16_t R = static_cast<int16_t>(right_channel * 32767.0f * 0.5f);\n";
-            configH << "    int16_t buf[2] = { L, R };\n";
-            configH << "    size_t bytes = 0;\n";
-            configH << "    i2s_channel_write(tx_handle, buf, sizeof(buf), &bytes, portMAX_DELAY);\n";
-            configH << "}\n\n";
-            configH << "#endif\n";
+            if (getValue<int>(audioOutputValue) == 1) {
+                // ESP32 DAC path (continuous mode)
+                configH << "#ifndef CONFIG_H\n#define CONFIG_H\n\n";
+                configH << "#include <stdint.h>\n";
+                configH << "#include <math.h>\n";
+                configH << "#include \"esp_check.h\"\n";
+                configH << "#include \"driver/dac_continuous.h\"\n\n";
+                configH << "// DAC handle and small staging buffer for efficient DMA writes\n";
+                configH << "static dac_continuous_handle_t s_dac = nullptr;\n";
+                // Staging buffer size (configurable)
+                int stagingSize = getValue<int>(dacStagingBufferValue);
+                configH << "static uint8_t s_dac_buf[" << String(stagingSize) << "];\n";
+                configH << "static size_t s_dac_idx = 0;\n\n";
+                // Determine which DAC channel outputs LEFT: CH0=GPIO25, CH1=GPIO26
+                bool leftIsCh0 = (getValue<int>(leftDacPinValue) == 1);
+                configH << String("static const bool LEFT_IS_CH0 = ") << (leftIsCh0 ? "true" : "false") << ";\n\n";
+                configH << "// Initialize DAC continuous mode on GPIO25 (DAC channel 0) at the given sample rate\n";
+                configH << "void audio_init(uint32_t& sample_rate)\n";
+                configH << "{\n";
+                // Advanced config values
+                int descNum = getValue<int>(dacDescNumValue);
+                int bufSize = getValue<int>(dacBufSizeValue);
+                int offset = getValue<int>(dacOffsetValue);
+                int clkSel = getValue<int>(dacClkSrcValue);
+                String clkConst = (clkSel == 2 ? "DAC_DIGI_CLK_SRC_APLL" : "DAC_DIGI_CLK_SRC_DEFAULT");
+                int modeSel = getValue<int>(dacChanModeValue);
+                String modeConst = (modeSel == 2 ? "DAC_CHANNEL_MODE_SIMUL" : "DAC_CHANNEL_MODE_ALTER");
+                bool freqOverride = getValue<bool>(dacFreqOverrideEnable);
+                int freqHz = getValue<int>(dacFreqOverrideValue);
+                configH << "    if (" << (freqOverride ? "true" : "false") << ") { sample_rate = " << String(freqHz) << "; }\n";
+                configH << "    dac_continuous_config_t cfg = {\n";
+                configH << "        .chan_mask = (dac_channel_mask_t)((LEFT_IS_CH0 ? DAC_CHANNEL_MASK_CH0 : DAC_CHANNEL_MASK_CH1) | (LEFT_IS_CH0 ? DAC_CHANNEL_MASK_CH1 : DAC_CHANNEL_MASK_CH0)),\n";
+                configH << "        .desc_num = " << String(descNum) << ",\n";
+                configH << "        .buf_size = " << String(bufSize) << ",\n";
+                configH << "        .freq_hz = sample_rate,\n";
+                configH << "        .offset = " << String(offset) << ",\n";
+                configH << "        .clk_src = " << clkConst << ",\n";
+                configH << "        .chan_mode = " << modeConst << ",\n";
+                configH << "    };\n\n";
+                configH << "    ESP_ERROR_CHECK(dac_continuous_new_channels(&cfg, &s_dac));\n";
+                configH << "    ESP_ERROR_CHECK(dac_continuous_enable(s_dac));\n";
+                configH << "}\n\n";
+                configH << "// Convert stereo float [-1.0, 1.0] to mono 8-bit [0,255] and stream to DAC via DMA\n";
+                configH << "void to_audio_write(float left_channel, float right_channel)\n";
+                configH << "{\n";
+                configH << "    // Map stereo [-1,1] to 8-bit [0,255] and interleave as required by DAC alternating mode\n";
+                configH << "    auto to_u8 = [](float x) -> uint8_t {\n";
+                configH << "        if (x > 1.0f) x = 1.0f;\n";
+                configH << "        if (x < -1.0f) x = -1.0f;\n";
+                configH << "        float scaled = (x * 0.5f + 0.5f) * 255.0f;\n";
+                configH << "        return (scaled < 0.0f) ? 0 : (scaled > 255.0f ? 255 : (uint8_t)lroundf(scaled));\n";
+                configH << "    };\n\n";
+                configH << "    uint8_t L = to_u8(left_channel);\n";
+                configH << "    uint8_t R = to_u8(right_channel);\n\n";
+                configH << "    if (LEFT_IS_CH0) {\n";
+                configH << "        s_dac_buf[s_dac_idx++] = L;\n";
+                configH << "        s_dac_buf[s_dac_idx++] = R;\n";
+                configH << "    } else {\n";
+                configH << "        s_dac_buf[s_dac_idx++] = R;\n";
+                configH << "        s_dac_buf[s_dac_idx++] = L;\n";
+                configH << "    }\n\n";
+                configH << "    if (s_dac_idx >= sizeof(s_dac_buf)) {\n";
+                configH << "        size_t loaded = 0;\n";
+                int writeTimeout = getValue<int>(dacWriteTimeoutValue);
+                configH << "        ESP_ERROR_CHECK(dac_continuous_write(s_dac, s_dac_buf, s_dac_idx, &loaded, " << String(writeTimeout) << "));\n";
+                configH << "        (void)loaded;\n";
+                configH << "        s_dac_idx = 0;\n";
+                configH << "    }\n";
+                configH << "}\n\n";
+                configH << "#endif\n";
+            } else {
+                // External DAC via I2S (existing behaviour)
+                configH << "#ifndef CONFIG_H\n#define CONFIG_H\n\n";
+                configH << "#include <stdint.h>\n\n";
+                configH << "static i2s_chan_handle_t tx_handle;\n\n";
+                configH << "void audio_init(uint32_t& sample_rate)\n{\n";
+                configH << "    static const i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(\n";
+                configH << "        I2S_NUM_AUTO,\n        I2S_ROLE_MASTER\n    );\n\n";
+                configH << "    static const i2s_std_config_t i2s_config = {\n";
+                configH << "        .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(sample_rate),\n";
+                configH << "        .slot_cfg = I2S_STD_MSB_SLOT_DEFAULT_CONFIG(\n";
+                configH << "            I2S_DATA_BIT_WIDTH_16BIT,\n            I2S_SLOT_MODE_STEREO\n        ),\n";
+                configH << "        .gpio_cfg = {\n";
+                configH << "            .mclk = I2S_GPIO_UNUSED,\n";
+                configH << "            .bclk = GPIO_NUM_27,\n";
+                configH << "            .ws = GPIO_NUM_26,\n";
+                configH << "            .dout = GPIO_NUM_25,\n";
+                configH << "            .din = I2S_GPIO_UNUSED,\n";
+                configH << "            .invert_flags = { .mclk_inv = false, .bclk_inv = false, .ws_inv = false },\n";
+                configH << "        },\n";
+                configH << "    };\n\n";
+                configH << "    i2s_new_channel(&chan_cfg, &tx_handle, NULL);\n";
+                configH << "    i2s_channel_init_std_mode(tx_handle, &i2s_config);\n";
+                configH << "    i2s_channel_enable(tx_handle);\n";
+                configH << "}\n\n";
+                configH << "void to_audio_write(float left_channel, float right_channel)\n{\n";
+                configH << "    int16_t L = static_cast<int16_t>(left_channel * 32767.0f * 0.5f);\n";
+                configH << "    int16_t R = static_cast<int16_t>(right_channel * 32767.0f * 0.5f);\n";
+                configH << "    int16_t buf[2] = { L, R };\n";
+                configH << "    size_t bytes = 0;\n";
+                configH << "    i2s_channel_write(tx_handle, buf, sizeof(buf), &bytes, portMAX_DELAY);\n";
+                configH << "}\n\n";
+                configH << "#endif\n";
+            }
             mainDir.getChildFile("config.h").replaceWithText(configH);
 
             String appMain;
