@@ -11,6 +11,90 @@
 #include "Utility/OSUtils.h"
 #include <juce_gui_basics/juce_gui_basics.h>
 
+// Custom property: pin selection combo with actual GPIO ids
+class AdcPinProperty final : public PropertiesPanelProperty, public Value::Listener {
+public:
+    AdcPinProperty(String const& propertyName, Value& pinValue)
+        : PropertiesPanelProperty(propertyName), value(pinValue)
+    {
+        // Common ADC-capable pins on ESP32
+        addItem("Unassigned", 0);
+        addItem("GPIO32", 32);
+        addItem("GPIO33", 33);
+        addItem("GPIO34", 34);
+        addItem("GPIO35", 35);
+        addItem("GPIO36", 36);
+        addItem("GPIO39", 39);
+        // ADC2 pins (availability may vary if Wi-Fi is used)
+        addItem("GPIO4", 4);
+        addItem("GPIO0", 0);
+        addItem("GPIO2", 2);
+        addItem("GPIO12", 12);
+        addItem("GPIO13", 13);
+        addItem("GPIO14", 14);
+        addItem("GPIO15", 15);
+        addItem("GPIO25", 25);
+        addItem("GPIO26", 26);
+        addItem("GPIO27", 27);
+
+        combo.onChange = [this] {
+            value = combo.getSelectedId();
+        };
+        value.addListener(this);
+        addAndMakeVisible(combo);
+        refresh();
+    }
+
+    void valueChanged(Value& v) override
+    {
+        const int pin = getValue<int>(v);
+        if (combo.getSelectedId() != pin)
+            combo.setSelectedId(pin, dontSendNotification);
+    }
+
+    void resized() override
+    {
+        combo.setBounds(getLocalBounds().removeFromRight(getWidth() / (2 - hideLabel)));
+    }
+
+private:
+    void addItem(String const& label, int id)
+    {
+        combo.addItem(label, id);
+    }
+
+    Value& value;
+    ComboBox combo;
+};
+
+// Custom property: Add/Remove ADC controls in a single row
+class AdcControlsProperty final : public PropertiesPanelProperty {
+public:
+    AdcControlsProperty(std::function<void()> onAddFn, std::function<void()> onRemoveFn)
+        : PropertiesPanelProperty("ADC Controls"), onAdd(std::move(onAddFn)), onRemove(std::move(onRemoveFn))
+    {
+        addButton.setButtonText("Add ADC");
+        removeButton.setButtonText("Remove ADC");
+        addButton.onClick = [this]{ if (onAdd) onAdd(); };
+        removeButton.onClick = [this]{ if (onRemove) onRemove(); };
+        addAndMakeVisible(addButton);
+        addAndMakeVisible(removeButton);
+    }
+
+    void resized() override
+    {
+        auto r = getLocalBounds().removeFromRight(getWidth() / (2 - hideLabel));
+        const int w = 120;
+        const int h = jmax(24, r.getHeight() - 6);
+        removeButton.setBounds(r.removeFromRight(w).withTrimmedTop(3).withHeight(h));
+        addButton.setBounds(r.removeFromRight(w).withTrimmedTop(3).withHeight(h));
+    }
+
+private:
+    TextButton addButton, removeButton;
+    std::function<void()> onAdd, onRemove;
+};
+
 class ESP32Exporter final : public ExporterBase {
 public:
     // Audio output selection: 1 = ESP32 DAC, 2 = External DAC
@@ -89,10 +173,20 @@ public:
     PropertiesPanelProperty* i2sInvertWsProperty = nullptr;
     PropertiesPanelProperty* i2sWriteTimeoutProperty = nullptr;
 
+    // ADC GUI (UI-only for now): allow adding/removing ADCs with Name + Pin
+    static constexpr int kMaxAdc = 8; // UI supports up to 8 ADC entries
+    Value adcCountValue = SynchronousValue(var(0));
+    Value adcNameValues[kMaxAdc];
+    Value adcPinValues[kMaxAdc];
+    PropertiesPanelProperty* adcNameProps[kMaxAdc] {};
+    PropertiesPanelProperty* adcPinProps[kMaxAdc] {};
+    TextButton addAdcButton { "Add ADC" };
+    TextButton removeAdcButton { "Remove ADC" };
+
     ESP32Exporter(PluginEditor* editor, ExportingProgressView* exportingView)
         : ExporterBase(editor, exportingView)
     {
-        // ESP32-specific options section
+        // Audio Output section
         {
             PropertiesArray properties;
             properties.add(new PropertiesPanel::ComboComponent("Audio Output", audioOutputValue, { "ESP32 DAC", "External DAC" }));
@@ -163,7 +257,49 @@ public:
             properties.add(i2sInvertWsProperty);
             properties.add(i2sWriteTimeoutProperty);
             for (auto* property : properties) property->setPreferredHeight(28);
-            panel.addSection("ESP32", properties);
+            panel.addSection("Audio Output", properties);
+        }
+
+        // ADC Inputs section (UI only)
+        {
+            // Initialize default values for ADC rows
+            for (int i = 0; i < kMaxAdc; ++i) {
+                adcNameValues[i] = SynchronousValue(var("ADC " + String(i + 1)));
+                adcPinValues[i]  = SynchronousValue(var(0));
+            }
+
+            PropertiesArray adcProps;
+            for (int i = 0; i < kMaxAdc; ++i) {
+                adcNameProps[i] = new PropertiesPanel::EditableComponent<String>("ADC " + String(i + 1) + " Name", adcNameValues[i]);
+                adcPinProps[i]  = new AdcPinProperty("ADC " + String(i + 1) + " Pin", adcPinValues[i]);
+                adcProps.add(adcNameProps[i]);
+                adcProps.add(adcPinProps[i]);
+            }
+            // Controls row goes last, so it's near the title when no ADCs are visible, and pushed down as rows are added
+            auto* controls = new AdcControlsProperty(
+                [this]{
+                    int count = getValue<int>(adcCountValue);
+                    if (count < kMaxAdc) {
+                        adcCountValue = count + 1;
+                        if (adcNameProps[count]) adcNameProps[count]->setVisible(true);
+                        if (adcPinProps[count])  adcPinProps[count]->setVisible(true);
+                        panel.updatePropHolderLayout();
+                    }
+                },
+                [this]{
+                    int count = getValue<int>(adcCountValue);
+                    if (count > 0) {
+                        count -= 1;
+                        adcCountValue = count;
+                        if (adcNameProps[count]) adcNameProps[count]->setVisible(false);
+                        if (adcPinProps[count])  adcPinProps[count]->setVisible(false);
+                        panel.updatePropHolderLayout();
+                    }
+                }
+            );
+            adcProps.add(controls);
+            for (auto* property : adcProps) property->setPreferredHeight(28);
+            panel.addSection("ADC Inputs", adcProps);
         }
 
         // Simplified panel: only a Flash button
@@ -240,9 +376,17 @@ public:
             setI2SAdvVis(i2sInvertBclkProperty);
             setI2SAdvVis(i2sInvertWsProperty);
             setI2SAdvVis(i2sWriteTimeoutProperty);
+            // ADC rows visibility based on adcCountValue
+            int count = jlimit(0, kMaxAdc, getValue<int>(adcCountValue));
+            for (int i = 0; i < kMaxAdc; ++i) {
+                const bool vis = (i < count);
+                if (adcNameProps[i]) adcNameProps[i]->setVisible(vis);
+                if (adcPinProps[i])  adcPinProps[i]->setVisible(vis);
+            }
             panel.updatePropHolderLayout();
         };
         initVisibility();
+
     }
 
     void resized() override {
@@ -288,6 +432,17 @@ public:
         stateTree.setProperty("i2sInvertBclkValue", getValue<bool>(i2sInvertBclkValue), nullptr);
         stateTree.setProperty("i2sInvertWsValue", getValue<bool>(i2sInvertWsValue), nullptr);
         stateTree.setProperty("i2sWriteTimeoutMsValue", getValue<int>(i2sWriteTimeoutMsValue), nullptr);
+        // ADC (UI only)
+        stateTree.setProperty("adcCountValue", getValue<int>(adcCountValue), nullptr);
+        ValueTree adcTree("ADCInputs");
+        int count = jlimit(0, kMaxAdc, getValue<int>(adcCountValue));
+        for (int i = 0; i < count; ++i) {
+            ValueTree item("ADC");
+            item.setProperty("name", getValue<String>(adcNameValues[i]), nullptr);
+            item.setProperty("pin",  getValue<int>(adcPinValues[i]), nullptr);
+            adcTree.addChild(item, -1, nullptr);
+        }
+        stateTree.addChild(adcTree, -1, nullptr);
         return stateTree;
     }
 
@@ -332,6 +487,26 @@ public:
         if (tree.hasProperty("i2sInvertBclkValue")) i2sInvertBclkValue = tree.getProperty("i2sInvertBclkValue");
         if (tree.hasProperty("i2sInvertWsValue")) i2sInvertWsValue = tree.getProperty("i2sInvertWsValue");
         if (tree.hasProperty("i2sWriteTimeoutMsValue")) i2sWriteTimeoutMsValue = tree.getProperty("i2sWriteTimeoutMsValue");
+        // ADC (UI only)
+        if (tree.hasProperty("adcCountValue")) adcCountValue = tree.getProperty("adcCountValue");
+        if (auto adcTree = tree.getChildWithName("ADCInputs"); adcTree.isValid()) {
+            auto count = jmin(adcTree.getNumChildren(), kMaxAdc);
+            for (int i = 0; i < count; ++i) {
+                auto item = adcTree.getChild(i);
+                if (item.hasProperty("name")) adcNameValues[i] = item.getProperty("name");
+                if (item.hasProperty("pin"))  adcPinValues[i]  = item.getProperty("pin");
+            }
+        }
+        // Update visibility after loading
+        {
+            int count = jlimit(0, kMaxAdc, getValue<int>(adcCountValue));
+            for (int i = 0; i < kMaxAdc; ++i) {
+                const bool vis = (i < count);
+                if (adcNameProps[i]) adcNameProps[i]->setVisible(vis);
+                if (adcPinProps[i])  adcPinProps[i]->setVisible(vis);
+            }
+            panel.updatePropHolderLayout();
+        }
     }
 
     void valueChanged(Value& v) override {
@@ -574,13 +749,31 @@ public:
                 configH << "    i2s_channel_enable(tx_handle);\n";
                 configH << "}\n\n";
                 configH << "void to_audio_write(float left_channel, float right_channel)\n{\n";
-                configH << "    int16_t L = static_cast<int16_t>(left_channel * 32767.0f * 0.5f);\n";
-                configH << "    int16_t R = static_cast<int16_t>(right_channel * 32767.0f * 0.5f);\n";
-                configH << "    int16_t buf[2] = { L, R };\n";
-                configH << "    size_t bytes = 0;\n";
+                int dbw = getValue<int>(i2sDataBitWidthValue);
                 int wt = getValue<int>(i2sWriteTimeoutMsValue);
                 String wtExpr = (wt <= 0 ? String("portMAX_DELAY") : String(wt));
-                configH << "    i2s_channel_write(tx_handle, buf, sizeof(buf), &bytes, " << wtExpr << ");\n";
+                // Pack samples according to configured data bit width
+                if (dbw == 24 || dbw == 32) {
+                    configH << "    // 24/32-bit packing\n";
+                    configH << "    auto clampf = [](float x){ return x < -1.0f ? -1.0f : (x > 1.0f ? 1.0f : x); };\n";
+                    configH << "    int32_t L = (int32_t) lroundf(clampf(left_channel) * " << (getValue<int>(i2sDataBitWidthValue) == 24 ? "8388607.0f" : "2147483647.0f") << ");\n";
+                    configH << "    int32_t R = (int32_t) lroundf(clampf(right_channel) * " << (getValue<int>(i2sDataBitWidthValue) == 24 ? "8388607.0f" : "2147483647.0f") << ");\n";
+                    if (getValue<int>(i2sDataBitWidthValue) == 24) {
+                        configH << "    // Left-justify 24-bit data in 32-bit container\n";
+                        configH << "    L <<= 8; R <<= 8;\n";
+                    }
+                    configH << "    int32_t buf[2] = { L, R };\n";
+                    configH << "    size_t bytes = 0;\n";
+                    configH << "    i2s_channel_write(tx_handle, buf, sizeof(buf), &bytes, " << wtExpr << ");\n";
+                } else {
+                    configH << "    // 16-bit packing (standard I2S)\n";
+                    configH << "    auto clampf = [](float x){ return x < -1.0f ? -1.0f : (x > 1.0f ? 1.0f : x); };\n";
+                    configH << "    int16_t L = (int16_t) lroundf(clampf(left_channel) * 32767.0f);\n";
+                    configH << "    int16_t R = (int16_t) lroundf(clampf(right_channel) * 32767.0f);\n";
+                    configH << "    int16_t buf[2] = { L, R };\n";
+                    configH << "    size_t bytes = 0;\n";
+                    configH << "    i2s_channel_write(tx_handle, buf, sizeof(buf), &bytes, " << wtExpr << ");\n";
+                }
                 configH << "}\n\n";
                 configH << "#endif\n";
             }
