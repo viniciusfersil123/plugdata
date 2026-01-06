@@ -695,7 +695,10 @@ public:
             } else {
                 // External DAC via I2S with configurable pins and advanced options
                 configH << "#ifndef CONFIG_H\n#define CONFIG_H\n\n";
-                configH << "#include <stdint.h>\n\n";
+                configH << "#include <stdint.h>\n";
+                configH << "#include <math.h>\n";
+                // Ensure i2s types are visible even if config.h is included before app_main.cpp
+                configH << "#include \"driver/i2s_std.h\"\n\n";
                 configH << "static i2s_chan_handle_t tx_handle;\n\n";
                 configH << "void audio_init(uint32_t& sample_rate)\n{\n";
                 // Channel config
@@ -749,7 +752,6 @@ public:
                 configH << "    i2s_channel_enable(tx_handle);\n";
                 configH << "}\n\n";
                 configH << "void to_audio_write(float left_channel, float right_channel)\n{\n";
-                int dbw = getValue<int>(i2sDataBitWidthValue);
                 int wt = getValue<int>(i2sWriteTimeoutMsValue);
                 String wtExpr = (wt <= 0 ? String("portMAX_DELAY") : String(wt));
                 // Pack samples according to configured data bit width
