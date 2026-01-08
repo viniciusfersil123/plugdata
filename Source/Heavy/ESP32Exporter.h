@@ -626,6 +626,16 @@ public:
         {
             String configH;
             int blockSize = getValue<int>(audioBlockSizeValue);
+            // Resolve first ADC knob name and pin from the UI (fallbacks if none defined)
+            int adcCount = getValue<int>(adcCountValue);
+            String knobName = "Knob1";
+            int knobPin = 33; // default to GPIO33
+            if (adcCount > 0) {
+                knobName = getValue<String>(adcNameValues[0]);
+                knobPin = getValue<int>(adcPinValues[0]);
+                if (knobName.isEmpty()) knobName = "Knob1";
+                if (knobPin <= 0) knobPin = 33;
+            }
             if (getValue<int>(audioOutputValue) == 1) {
                 // ESP32 DAC path (continuous mode)
                 configH << "#ifndef CONFIG_H\n#define CONFIG_H\n\n";
@@ -808,26 +818,60 @@ public:
             appMain << "#include \"Heavy_Untitled.h\"\n\n";
             appMain << "static uint32_t sr = 48000;\n";
             appMain << "static HeavyContextInterface* hv_ctx = nullptr;\n\n";
-            appMain << "static const adc1_channel_t POT_ADC_CH = ADC1_CHANNEL_5;\n";
+            // Map selected GPIO pin to ADC unit/channel (declare both ADC1 and ADC2 constants to avoid compile-time undefined symbols)
+            {
+                bool useAdc1 = (knobPin == 32 || knobPin == 33 || knobPin == 34 || knobPin == 35 || knobPin == 36 || knobPin == 39);
+                String adc1ChConst = "ADC1_CHANNEL_5"; // default
+                String adc2ChConst = "ADC2_CHANNEL_0"; // default
+                // ADC1 mapping
+                if (knobPin == 36) adc1ChConst = "ADC1_CHANNEL_0";
+                else if (knobPin == 39) adc1ChConst = "ADC1_CHANNEL_3";
+                else if (knobPin == 32) adc1ChConst = "ADC1_CHANNEL_4";
+                else if (knobPin == 33) adc1ChConst = "ADC1_CHANNEL_5";
+                else if (knobPin == 34) adc1ChConst = "ADC1_CHANNEL_6";
+                else if (knobPin == 35) adc1ChConst = "ADC1_CHANNEL_7";
+                // ADC2 mapping
+                if (knobPin == 4) adc2ChConst = "ADC2_CHANNEL_0";
+                else if (knobPin == 0) adc2ChConst = "ADC2_CHANNEL_1";
+                else if (knobPin == 2) adc2ChConst = "ADC2_CHANNEL_2";
+                else if (knobPin == 15) adc2ChConst = "ADC2_CHANNEL_3";
+                else if (knobPin == 13) adc2ChConst = "ADC2_CHANNEL_4";
+                else if (knobPin == 12) adc2ChConst = "ADC2_CHANNEL_5";
+                else if (knobPin == 14) adc2ChConst = "ADC2_CHANNEL_6";
+                else if (knobPin == 27) adc2ChConst = "ADC2_CHANNEL_7";
+                else if (knobPin == 25) adc2ChConst = "ADC2_CHANNEL_8";
+                else if (knobPin == 26) adc2ChConst = "ADC2_CHANNEL_9";
+                appMain << String("static const bool USE_ADC1 = ") << (useAdc1 ? "true" : "false") << ";\n";
+                appMain << String("static const adc1_channel_t POT_ADC1_CH = ") << adc1ChConst << ";\n";
+                appMain << String("static const adc2_channel_t POT_ADC2_CH = ") << adc2ChConst << ";\n";
+            }
             appMain << "static const adc_atten_t POT_ATTEN = ADC_ATTEN_DB_12;\n";
             appMain << "static const adc_bits_width_t POT_WIDTH = ADC_WIDTH_BIT_12;\n";
             appMain << "static const uint32_t DEFAULT_VREF_MV = 1100;\n";
             appMain << "static esp_adc_cal_characteristics_t adc_chars;\n\n";
-            appMain << "static const char* HV_PARAM_NAME = \"Knob1\";\n";
+            appMain << String("static const char* HV_PARAM_NAME = ") << knobName.quoted() << ";\n";
             appMain << "static hv_uint32_t hv_param_hash = 0;\n";
             appMain << "static float hv_param_min = 0.0f;\n";
             appMain << "static float hv_param_max = 1.0f;\n";
             appMain << "static float pot_norm_smooth = 0.0f;\n";
             appMain << "static const float pot_alpha = 0.1f;\n\n";
             appMain << "static void adc_init()\n{\n";
-            appMain << "    adc1_config_width(POT_WIDTH);\n";
-            appMain << "    adc1_config_channel_atten(POT_ADC_CH, POT_ATTEN);\n";
-            appMain << "    (void) esp_adc_cal_characterize(ADC_UNIT_1, POT_ATTEN, POT_WIDTH, DEFAULT_VREF_MV, &adc_chars);\n";
+            appMain << "    if (USE_ADC1) {\n";
+            appMain << "        adc1_config_width(POT_WIDTH);\n";
+            appMain << "        adc1_config_channel_atten(POT_ADC1_CH, POT_ATTEN);\n";
+            appMain << "        (void) esp_adc_cal_characterize(ADC_UNIT_1, POT_ATTEN, POT_WIDTH, DEFAULT_VREF_MV, &adc_chars);\n";
+            appMain << "    } else {\n";
+            appMain << "        adc2_config_channel_atten(POT_ADC2_CH, POT_ATTEN);\n";
+            appMain << "        (void) esp_adc_cal_characterize(ADC_UNIT_2, POT_ATTEN, POT_WIDTH, DEFAULT_VREF_MV, &adc_chars);\n";
+            appMain << "    }\n";
             appMain << "}\n\n";
             appMain << "static float pot_read_norm()\n{\n";
             appMain << "    const int samples = 8;\n";
             appMain << "    uint32_t acc_raw = 0;\n";
-            appMain << "    for (int i = 0; i < samples; i++) acc_raw += adc1_get_raw(POT_ADC_CH);\n";
+            appMain << "    for (int i = 0; i < samples; i++) {\n";
+            appMain << "        if (USE_ADC1) acc_raw += adc1_get_raw(POT_ADC1_CH);\n";
+            appMain << "        else { int v = 0; adc2_get_raw(POT_ADC2_CH, POT_WIDTH, &v); acc_raw += (uint32_t)v; }\n";
+            appMain << "    }\n";
             appMain << "    uint32_t raw = acc_raw / samples;\n";
             appMain << "    // Fast normalize using raw range (12-bit -> 0..4095); avoids per-sample calibration overhead\n";
             appMain << "    float norm = (float)raw / 4095.0f;\n";
