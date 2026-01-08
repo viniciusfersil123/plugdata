@@ -112,7 +112,7 @@ public:
     // 1 = DEFAULT, 2 = APLL
     Value dacClkSrcValue = SynchronousValue(var(1));
     // 1 = Alternating, 2 = Simultaneous
-    Value dacChanModeValue = SynchronousValue(var(2));
+    Value dacChanModeValue = SynchronousValue(var(1));
     // Write timeout in ticks (-1 for blocking)
     Value dacWriteTimeoutValue = SynchronousValue(var(-1));
     // Staging buffer size for s_dac_buf
@@ -141,6 +141,8 @@ public:
     Value i2sInvertWsValue = SynchronousValue(var(false));
     Value i2sWriteTimeoutMsValue = SynchronousValue(var(0)); // 0=forever
     TextButton flashButton = TextButton("Flash");
+    // Audio processing block size (frames)
+    Value audioBlockSizeValue = SynchronousValue(var(128));
     PropertiesPanelProperty* leftPinProperty = nullptr;
     PropertiesPanelProperty* rightPinProperty = nullptr;
     PropertiesPanelProperty* advancedToggleProperty = nullptr;
@@ -190,6 +192,7 @@ public:
         {
             PropertiesArray properties;
             properties.add(new PropertiesPanel::ComboComponent("Audio Output", audioOutputValue, { "ESP32 DAC", "External DAC" }));
+            properties.add(new PropertiesPanel::EditableComponent<int>("Audio block size (frames)", audioBlockSizeValue, 16, 512));
             leftPinProperty = new PropertiesPanel::ComboComponent("Left pin (DAC)", leftDacPinValue, { "GPIO25 (CH0)", "GPIO26 (CH1)" });
             rightPinProperty = new PropertiesPanel::ComboComponent("Right pin (DAC)", rightDacPinValue, { "GPIO25 (CH0)", "GPIO26 (CH1)" });
             properties.add(leftPinProperty);
@@ -622,6 +625,7 @@ public:
         // main/config.h and main/app_main.cpp
         {
             String configH;
+            int blockSize = getValue<int>(audioBlockSizeValue);
             if (getValue<int>(audioOutputValue) == 1) {
                 // ESP32 DAC path (continuous mode)
                 configH << "#ifndef CONFIG_H\n#define CONFIG_H\n\n";
@@ -633,6 +637,7 @@ public:
                 configH << "static dac_continuous_handle_t s_dac = nullptr;\n";
                 // Staging buffer size (configurable)
                 int stagingSize = getValue<int>(dacStagingBufferValue);
+                if (stagingSize < blockSize * 2) stagingSize = blockSize * 2; // ensure staging buffer flush aligns with at least one audio block
                 configH << "static uint8_t s_dac_buf[" << String(stagingSize) << "];\n";
                 configH << "static size_t s_dac_idx = 0;\n\n";
                 // Determine which DAC channel outputs LEFT: CH0=GPIO25, CH1=GPIO26
@@ -652,8 +657,8 @@ public:
                 bool freqOverride = getValue<bool>(dacFreqOverrideEnable);
                 int freqHz = getValue<int>(dacFreqOverrideValue);
                 configH << "    if (" << (freqOverride ? "true" : "false") << ") { sample_rate = " << String(freqHz) << "; }\n";
-                // In ALTERNATING mode the driver outputs bytes alternately to channels, halving per-channel rate.
-                // Compensate by doubling the stream frequency to preserve the requested per-channel sample_rate.
+                // In ALTERNATING mode the driver alternates channel bytes, halving the per-channel sample rate.
+                // Compensate by doubling the stream frequency so each channel runs at the requested sample_rate.
                 configH << "    uint32_t stream_freq = sample_rate * (" << (modeSel == 1 ? "2" : "1") << ");\n";
                 configH << "    dac_continuous_config_t cfg = {\n";
                 configH << "        .chan_mask = (dac_channel_mask_t)((LEFT_IS_CH0 ? DAC_CHANNEL_MASK_CH0 : DAC_CHANNEL_MASK_CH1) | (LEFT_IS_CH0 ? DAC_CHANNEL_MASK_CH1 : DAC_CHANNEL_MASK_CH0)),\n";
@@ -679,22 +684,17 @@ public:
                 configH << "    for (size_t i = 0; i < frames; ++i) {\n";
                 configH << "        uint8_t L = _to_u8(interleavedLR[2*i]);\n";
                 configH << "        uint8_t R = _to_u8(interleavedLR[2*i+1]);\n";
-                configH << "        if (LEFT_IS_CH0) {\n";
-                configH << "            s_dac_buf[s_dac_idx++] = L;\n";
-                configH << "            s_dac_buf[s_dac_idx++] = R;\n";
-                configH << "        } else {\n";
-                configH << "            s_dac_buf[s_dac_idx++] = R;\n";
-                configH << "            s_dac_buf[s_dac_idx++] = L;\n";
-                configH << "        }\n";
+                configH << "        if (LEFT_IS_CH0) { s_dac_buf[s_dac_idx++] = L; s_dac_buf[s_dac_idx++] = R; } else { s_dac_buf[s_dac_idx++] = R; s_dac_buf[s_dac_idx++] = L; }\n";
                 configH << "        if (s_dac_idx >= sizeof(s_dac_buf)) {\n";
-                configH << "            size_t loaded = 0;\n";
-                int writeTimeout = getValue<int>(dacWriteTimeoutValue);
-                configH << "            ESP_ERROR_CHECK(dac_continuous_write(s_dac, s_dac_buf, s_dac_idx, &loaded, " << String(writeTimeout) << "));\n";
-                configH << "            (void)loaded; s_dac_idx = 0;\n";
+                configH << "            size_t loaded_total = 0;\n";
+                configH << "            while (loaded_total < s_dac_idx) {\n";
+                configH << "                size_t loaded = 0;\n";
+                configH << "                ESP_ERROR_CHECK(dac_continuous_write(s_dac, s_dac_buf + loaded_total, s_dac_idx - loaded_total, &loaded, " << String(getValue<int>(dacWriteTimeoutValue) <= 0 ? "-1" : String(getValue<int>(dacWriteTimeoutValue))) << "));\n";
+                configH << "                loaded_total += loaded;\n";
+                configH << "            }\n";
+                configH << "            s_dac_idx = 0;\n";
                 configH << "        }\n";
                 configH << "    }\n";
-                configH << "    // Flush any remaining bytes to DAC to avoid latency bursts at block boundaries\n";
-                configH << "    if (s_dac_idx > 0) { size_t loaded = 0; ESP_ERROR_CHECK(dac_continuous_write(s_dac, s_dac_buf, s_dac_idx, &loaded, " << String(writeTimeout) << ")); (void)loaded; s_dac_idx = 0; }\n";
                 configH << "}\n\n";
                 configH << "// Single-frame convenience\n";
                 configH << "static inline void to_audio_write(float L, float R) { float lr[2] = {L, R}; to_audio_write_block(lr, 1); }\n\n";
@@ -762,51 +762,34 @@ public:
                 configH << "static inline void to_audio_write_block(const float* interleavedLR, size_t frames)\n{\n";
                 int wt = getValue<int>(i2sWriteTimeoutMsValue);
                 String wtExpr = (wt <= 0 ? String("portMAX_DELAY") : String(wt));
-                // Pack samples according to configured data bit width
                 if (dbw == 24 || dbw == 32) {
-                    configH << "    // 24/32-bit packing\n";
                     configH << "    auto clampf = [](float x){ return x < -1.0f ? -1.0f : (x > 1.0f ? 1.0f : x); };\n";
                     configH << "    const float scale = " << (getValue<int>(i2sDataBitWidthValue) == 24 ? "8388607.0f" : "2147483647.0f") << ";\n";
-                    configH << "    // Pack into a temporary buffer and write once\n";
-                    configH << "    // Each frame contributes 2x32-bit words\n";
-                    configH << "    static int32_t packbuf[2*1024]; // supports up to 1024 frames per call\n";
-                    configH << "    size_t n = (frames > 1024 ? 1024 : frames);\n";
+                    configH << "    static int32_t packbuf[2*" << String(blockSize) << "];\n";
+                    configH << "    size_t n = (frames > " << String(blockSize) << " ? " << String(blockSize) << " : frames);\n";
                     configH << "    for (size_t i = 0; i < n; ++i) {\n";
                     configH << "        int32_t L = (int32_t) lroundf(clampf(interleavedLR[2*i]) * scale);\n";
                     configH << "        int32_t R = (int32_t) lroundf(clampf(interleavedLR[2*i+1]) * scale);\n";
-                    if (getValue<int>(i2sDataBitWidthValue) == 24) {
-                        configH << "        L <<= 8; R <<= 8;\n";
-                    }
+                    if (getValue<int>(i2sDataBitWidthValue) == 24) { configH << "        L <<= 8; R <<= 8;\n"; }
                     configH << "        packbuf[2*i] = L; packbuf[2*i+1] = R;\n";
                     configH << "    }\n";
-                    configH << "    size_t bytes = 0;\n";
                     configH << "    size_t total = n * sizeof(int32_t) * 2;\n";
                     configH << "    size_t written = 0;\n";
                     configH << "    uint8_t* ptr = (uint8_t*)packbuf;\n";
-                    configH << "    while (written < total) {\n";
-                    configH << "        size_t chunk = 0;\n";
-                    configH << "        i2s_channel_write(tx_handle, ptr + written, total - written, &chunk, " << wtExpr << ");\n";
-                    configH << "        written += chunk;\n";
-                    configH << "    }\n";
+                    configH << "    while (written < total) { size_t chunk = 0; i2s_channel_write(tx_handle, ptr + written, total - written, &chunk, " << wtExpr << "); written += chunk; }\n";
                 } else {
-                    configH << "    // 16-bit packing (standard I2S)\n";
                     configH << "    auto clampf = [](float x){ return x < -1.0f ? -1.0f : (x > 1.0f ? 1.0f : x); };\n";
-                    configH << "    static int16_t packbuf[2*1024]; // supports up to 1024 frames per call\n";
-                    configH << "    size_t n = (frames > 1024 ? 1024 : frames);\n";
+                    configH << "    static int16_t packbuf[2*" << String(blockSize) << "];\n";
+                    configH << "    size_t n = (frames > " << String(blockSize) << " ? " << String(blockSize) << " : frames);\n";
                     configH << "    for (size_t i = 0; i < n; ++i) {\n";
                     configH << "        int16_t L = (int16_t) lroundf(clampf(interleavedLR[2*i]) * 32767.0f);\n";
                     configH << "        int16_t R = (int16_t) lroundf(clampf(interleavedLR[2*i+1]) * 32767.0f);\n";
                     configH << "        packbuf[2*i] = L; packbuf[2*i+1] = R;\n";
                     configH << "    }\n";
-                    configH << "    size_t bytes = 0;\n";
                     configH << "    size_t total = n * sizeof(int16_t) * 2;\n";
                     configH << "    size_t written = 0;\n";
                     configH << "    uint8_t* ptr = (uint8_t*)packbuf;\n";
-                    configH << "    while (written < total) {\n";
-                    configH << "        size_t chunk = 0;\n";
-                    configH << "        i2s_channel_write(tx_handle, ptr + written, total - written, &chunk, " << wtExpr << ");\n";
-                    configH << "        written += chunk;\n";
-                    configH << "    }\n";
+                    configH << "    while (written < total) { size_t chunk = 0; i2s_channel_write(tx_handle, ptr + written, total - written, &chunk, " << wtExpr << "); written += chunk; }\n";
                 }
                 configH << "}\n\n";
                 configH << "// Single-frame convenience\n";
@@ -834,38 +817,30 @@ public:
             appMain << "static hv_uint32_t hv_param_hash = 0;\n";
             appMain << "static float hv_param_min = 0.0f;\n";
             appMain << "static float hv_param_max = 1.0f;\n";
-            appMain << "static volatile float g_param_mapped = 0.0f; // latest control value shared with audio task\n\n";
             appMain << "static float pot_norm_smooth = 0.0f;\n";
-            appMain << "static const float pot_alpha = 0.05f; // stronger smoothing to reduce control jitter\n\n";
+            appMain << "static const float pot_alpha = 0.1f;\n\n";
             appMain << "static void adc_init()\n{\n";
             appMain << "    adc1_config_width(POT_WIDTH);\n";
             appMain << "    adc1_config_channel_atten(POT_ADC_CH, POT_ATTEN);\n";
             appMain << "    (void) esp_adc_cal_characterize(ADC_UNIT_1, POT_ATTEN, POT_WIDTH, DEFAULT_VREF_MV, &adc_chars);\n";
             appMain << "}\n\n";
             appMain << "static float pot_read_norm()\n{\n";
-            appMain << "    const int samples = 16;\n";
+            appMain << "    const int samples = 8;\n";
             appMain << "    uint32_t acc_raw = 0;\n";
             appMain << "    for (int i = 0; i < samples; i++) acc_raw += adc1_get_raw(POT_ADC_CH);\n";
             appMain << "    uint32_t raw = acc_raw / samples;\n";
-            appMain << "    uint32_t mv = esp_adc_cal_raw_to_voltage(raw, &adc_chars);\n";
-            appMain << "    float norm = (float)mv / 2450.0f;\n";
+            appMain << "    // Fast normalize using raw range (12-bit -> 0..4095); avoids per-sample calibration overhead\n";
+            appMain << "    float norm = (float)raw / 4095.0f;\n";
             appMain << "    if (norm < 0.0f) { norm = 0.0f; }\n";
             appMain << "    if (norm > 1.0f) { norm = 1.0f; }\n";
             appMain << "    pot_norm_smooth += pot_alpha * (norm - pot_norm_smooth);\n";
             appMain << "    return pot_norm_smooth;\n";
             appMain << "}\n\n";
-            appMain << "static volatile bool g_param_dirty = false;\n";
-            appMain << "static void audio_task(void* arg)\n{\n";
-            appMain << "    const size_t BLOCK = 128; // smaller blocks reduce stepping and improve scheduling\n";
-            appMain << "    float outLR[BLOCK*2] = {0.f};\n";
-            appMain << "    static uint32_t block_ctr = 0;\n";
-            appMain << "    while (1) {\n";
-            appMain << "        // Apply latest control value from non-audio thread only when changed\n";
-            appMain << "        if (g_param_dirty) { float ctrl = g_param_mapped; if (hv_param_hash != 0) hv_sendFloatToReceiver(hv_ctx, hv_param_hash, ctrl); g_param_dirty = false; }\n";
-            appMain << "        hv_processInlineInterleaved(hv_ctx, nullptr, outLR, BLOCK);\n";
-            appMain << "        to_audio_write_block(outLR, BLOCK);\n";
-            appMain << "        if ((block_ctr++ & 0x1F) == 0) { vTaskDelay(1); } else { taskYIELD(); }\n";
-            appMain << "    }\n";
+            // Per-sample audio callback to match the known-good baseline; keep everything else unchanged
+            appMain << "static void audio_callback()\n{\n";
+            appMain << "    float outLR[2] = {0.f, 0.f};\n";
+            appMain << "    hv_processInlineInterleaved(hv_ctx, nullptr, outLR, 1);\n";
+            appMain << "    to_audio_write(outLR[0], outLR[1]);\n";
             appMain << "}\n\n";
             appMain << "extern \"C\" void app_main(void)\n{\n";
             appMain << "    audio_init(sr);\n";
@@ -878,14 +853,15 @@ public:
             appMain << "        if (fallback_hash == 0 && info.type == HV_PARAM_TYPE_PARAMETER_IN) { fallback_hash = info.hash; hv_param_min = info.minVal; hv_param_max = info.maxVal; } }\n";
             appMain << "    if (hv_param_hash == 0 && fallback_hash != 0) hv_param_hash = fallback_hash;\n";
             appMain << "    adc_init();\n";
-            appMain << "    xTaskCreatePinnedToCore(audio_task, \"audio\", 8192, NULL, 4, NULL, 1);\n";
+            appMain << "    // Run in a tight loop: generate one sample and feed DAC; send control at a low cadence to avoid timing spikes\n";
+            appMain << "    uint32_t ctr = 0;\n";
             appMain << "    while (1) {\n";
-            appMain << "        // Update parameter smoothly and frequently to avoid stepping\n";
-            appMain << "        float norm = pot_read_norm();\n";
-            appMain << "        float mapped = hv_param_min + norm * (hv_param_max - hv_param_min);\n";
-            appMain << "        float eps = 0.002f * (hv_param_max - hv_param_min);\n";
-            appMain << "        if (fabsf(mapped - g_param_mapped) > eps) { g_param_mapped = mapped; g_param_dirty = true; }\n";
-            appMain << "        vTaskDelay(pdMS_TO_TICKS(5));\n";
+            appMain << "        if ((ctr++ & 0xFFu) == 0) {\n";
+            appMain << "            float norm = pot_read_norm();\n";
+            appMain << "            float mapped = hv_param_min + norm * (hv_param_max - hv_param_min);\n";
+            appMain << "            if (hv_param_hash != 0) hv_sendFloatToReceiver(hv_ctx, hv_param_hash, mapped);\n";
+            appMain << "        }\n";
+            appMain << "        audio_callback();\n";
             appMain << "    }\n";
             appMain << "}\n";
             mainDir.getChildFile("app_main.cpp").replaceWithText(appMain);
