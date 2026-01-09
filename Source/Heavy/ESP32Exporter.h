@@ -626,15 +626,23 @@ public:
         {
             String configH;
             int blockSize = getValue<int>(audioBlockSizeValue);
-            // Resolve first ADC knob name and pin from the UI (fallbacks if none defined)
+            // Resolve up to two ADC knob names and pins from the UI (fallbacks if none defined)
             int adcCount = getValue<int>(adcCountValue);
-            String knobName = "Knob1";
-            int knobPin = 33; // default to GPIO33
+            String knob1Name = "Knob1";
+            int knob1Pin = 33; // default to GPIO33
+            String knob2Name = "Knob2";
+            int knob2Pin = 32; // default to GPIO32
             if (adcCount > 0) {
-                knobName = getValue<String>(adcNameValues[0]);
-                knobPin = getValue<int>(adcPinValues[0]);
-                if (knobName.isEmpty()) knobName = "Knob1";
-                if (knobPin <= 0) knobPin = 33;
+                knob1Name = getValue<String>(adcNameValues[0]);
+                knob1Pin = getValue<int>(adcPinValues[0]);
+                if (knob1Name.isEmpty()) knob1Name = "Knob1";
+                if (knob1Pin <= 0) knob1Pin = 33;
+            }
+            if (adcCount > 1) {
+                knob2Name = getValue<String>(adcNameValues[1]);
+                knob2Pin = getValue<int>(adcPinValues[1]);
+                if (knob2Name.isEmpty()) knob2Name = "Knob2";
+                if (knob2Pin <= 0) knob2Pin = 32;
             }
             if (getValue<int>(audioOutputValue) == 1) {
                 // ESP32 DAC path (continuous mode)
@@ -818,67 +826,121 @@ public:
             appMain << "#include \"Heavy_Untitled.h\"\n\n";
             appMain << "static uint32_t sr = 48000;\n";
             appMain << "static HeavyContextInterface* hv_ctx = nullptr;\n\n";
-            // Map selected GPIO pin to ADC unit/channel (declare both ADC1 and ADC2 constants to avoid compile-time undefined symbols)
+            // Map selected GPIO pins to ADC unit/channel for up to two ADCs (declare both ADC1 and ADC2 constants)
             {
-                bool useAdc1 = (knobPin == 32 || knobPin == 33 || knobPin == 34 || knobPin == 35 || knobPin == 36 || knobPin == 39);
-                String adc1ChConst = "ADC1_CHANNEL_5"; // default
-                String adc2ChConst = "ADC2_CHANNEL_0"; // default
-                // ADC1 mapping
-                if (knobPin == 36) adc1ChConst = "ADC1_CHANNEL_0";
-                else if (knobPin == 39) adc1ChConst = "ADC1_CHANNEL_3";
-                else if (knobPin == 32) adc1ChConst = "ADC1_CHANNEL_4";
-                else if (knobPin == 33) adc1ChConst = "ADC1_CHANNEL_5";
-                else if (knobPin == 34) adc1ChConst = "ADC1_CHANNEL_6";
-                else if (knobPin == 35) adc1ChConst = "ADC1_CHANNEL_7";
-                // ADC2 mapping
-                if (knobPin == 4) adc2ChConst = "ADC2_CHANNEL_0";
-                else if (knobPin == 0) adc2ChConst = "ADC2_CHANNEL_1";
-                else if (knobPin == 2) adc2ChConst = "ADC2_CHANNEL_2";
-                else if (knobPin == 15) adc2ChConst = "ADC2_CHANNEL_3";
-                else if (knobPin == 13) adc2ChConst = "ADC2_CHANNEL_4";
-                else if (knobPin == 12) adc2ChConst = "ADC2_CHANNEL_5";
-                else if (knobPin == 14) adc2ChConst = "ADC2_CHANNEL_6";
-                else if (knobPin == 27) adc2ChConst = "ADC2_CHANNEL_7";
-                else if (knobPin == 25) adc2ChConst = "ADC2_CHANNEL_8";
-                else if (knobPin == 26) adc2ChConst = "ADC2_CHANNEL_9";
-                appMain << String("static const bool USE_ADC1 = ") << (useAdc1 ? "true" : "false") << ";\n";
-                appMain << String("static const adc1_channel_t POT_ADC1_CH = ") << adc1ChConst << ";\n";
-                appMain << String("static const adc2_channel_t POT_ADC2_CH = ") << adc2ChConst << ";\n";
+                // ADC 1
+                bool useAdc1_1 = (knob1Pin == 32 || knob1Pin == 33 || knob1Pin == 34 || knob1Pin == 35 || knob1Pin == 36 || knob1Pin == 39);
+                String adc1ChConst_1 = "ADC1_CHANNEL_5"; // default
+                String adc2ChConst_1 = "ADC2_CHANNEL_0"; // default
+                if (knob1Pin == 36) adc1ChConst_1 = "ADC1_CHANNEL_0";
+                else if (knob1Pin == 39) adc1ChConst_1 = "ADC1_CHANNEL_3";
+                else if (knob1Pin == 32) adc1ChConst_1 = "ADC1_CHANNEL_4";
+                else if (knob1Pin == 33) adc1ChConst_1 = "ADC1_CHANNEL_5";
+                else if (knob1Pin == 34) adc1ChConst_1 = "ADC1_CHANNEL_6";
+                else if (knob1Pin == 35) adc1ChConst_1 = "ADC1_CHANNEL_7";
+                if (knob1Pin == 4) adc2ChConst_1 = "ADC2_CHANNEL_0";
+                else if (knob1Pin == 0) adc2ChConst_1 = "ADC2_CHANNEL_1";
+                else if (knob1Pin == 2) adc2ChConst_1 = "ADC2_CHANNEL_2";
+                else if (knob1Pin == 15) adc2ChConst_1 = "ADC2_CHANNEL_3";
+                else if (knob1Pin == 13) adc2ChConst_1 = "ADC2_CHANNEL_4";
+                else if (knob1Pin == 12) adc2ChConst_1 = "ADC2_CHANNEL_5";
+                else if (knob1Pin == 14) adc2ChConst_1 = "ADC2_CHANNEL_6";
+                else if (knob1Pin == 27) adc2ChConst_1 = "ADC2_CHANNEL_7";
+                else if (knob1Pin == 25) adc2ChConst_1 = "ADC2_CHANNEL_8";
+                else if (knob1Pin == 26) adc2ChConst_1 = "ADC2_CHANNEL_9";
+                appMain << String("static const bool USE_ADC1_1 = ") << (useAdc1_1 ? "true" : "false") << ";\n";
+                appMain << String("static const adc1_channel_t POT1_ADC1_CH = ") << adc1ChConst_1 << ";\n";
+                appMain << String("static const adc2_channel_t POT1_ADC2_CH = ") << adc2ChConst_1 << ";\n";
+
+                if (adcCount > 1) {
+                    bool useAdc1_2 = (knob2Pin == 32 || knob2Pin == 33 || knob2Pin == 34 || knob2Pin == 35 || knob2Pin == 36 || knob2Pin == 39);
+                    String adc1ChConst_2 = "ADC1_CHANNEL_4"; // default
+                    String adc2ChConst_2 = "ADC2_CHANNEL_0"; // default
+                    if (knob2Pin == 36) adc1ChConst_2 = "ADC1_CHANNEL_0";
+                    else if (knob2Pin == 39) adc1ChConst_2 = "ADC1_CHANNEL_3";
+                    else if (knob2Pin == 32) adc1ChConst_2 = "ADC1_CHANNEL_4";
+                    else if (knob2Pin == 33) adc1ChConst_2 = "ADC1_CHANNEL_5";
+                    else if (knob2Pin == 34) adc1ChConst_2 = "ADC1_CHANNEL_6";
+                    else if (knob2Pin == 35) adc1ChConst_2 = "ADC1_CHANNEL_7";
+                    if (knob2Pin == 4) adc2ChConst_2 = "ADC2_CHANNEL_0";
+                    else if (knob2Pin == 0) adc2ChConst_2 = "ADC2_CHANNEL_1";
+                    else if (knob2Pin == 2) adc2ChConst_2 = "ADC2_CHANNEL_2";
+                    else if (knob2Pin == 15) adc2ChConst_2 = "ADC2_CHANNEL_3";
+                    else if (knob2Pin == 13) adc2ChConst_2 = "ADC2_CHANNEL_4";
+                    else if (knob2Pin == 12) adc2ChConst_2 = "ADC2_CHANNEL_5";
+                    else if (knob2Pin == 14) adc2ChConst_2 = "ADC2_CHANNEL_6";
+                    else if (knob2Pin == 27) adc2ChConst_2 = "ADC2_CHANNEL_7";
+                    else if (knob2Pin == 25) adc2ChConst_2 = "ADC2_CHANNEL_8";
+                    else if (knob2Pin == 26) adc2ChConst_2 = "ADC2_CHANNEL_9";
+                    appMain << String("static const bool USE_ADC1_2 = ") << (useAdc1_2 ? "true" : "false") << ";\n";
+                    appMain << String("static const adc1_channel_t POT2_ADC1_CH = ") << adc1ChConst_2 << ";\n";
+                    appMain << String("static const adc2_channel_t POT2_ADC2_CH = ") << adc2ChConst_2 << ";\n";
+                } else {
+                    appMain << "static const bool USE_ADC1_2 = false;\n";
+                    appMain << "static const adc1_channel_t POT2_ADC1_CH = ADC1_CHANNEL_4;\n";
+                    appMain << "static const adc2_channel_t POT2_ADC2_CH = ADC2_CHANNEL_0;\n";
+                }
             }
             appMain << "static const adc_atten_t POT_ATTEN = ADC_ATTEN_DB_12;\n";
             appMain << "static const adc_bits_width_t POT_WIDTH = ADC_WIDTH_BIT_12;\n";
             appMain << "static const uint32_t DEFAULT_VREF_MV = 1100;\n";
             appMain << "static esp_adc_cal_characteristics_t adc_chars;\n\n";
-            appMain << String("static const char* HV_PARAM_NAME = ") << knobName.quoted() << ";\n";
-            appMain << "static hv_uint32_t hv_param_hash = 0;\n";
-            appMain << "static float hv_param_min = 0.0f;\n";
-            appMain << "static float hv_param_max = 1.0f;\n";
-            appMain << "static float pot_norm_smooth = 0.0f;\n";
+            appMain << String("static const char* HV_PARAM_NAME1 = ") << knob1Name.quoted() << ";\n";
+            if (adcCount > 1) appMain << String("static const char* HV_PARAM_NAME2 = ") << knob2Name.quoted() << ";\n";
+            appMain << "static hv_uint32_t hv_param_hash1 = 0;\n";
+            if (adcCount > 1) appMain << "static hv_uint32_t hv_param_hash2 = 0;\n";
+            appMain << "static float hv_param_min1 = 0.0f;\n";
+            appMain << "static float hv_param_max1 = 1.0f;\n";
+            if (adcCount > 1) { appMain << "static float hv_param_min2 = 0.0f;\n"; appMain << "static float hv_param_max2 = 1.0f;\n"; }
+            appMain << "static float pot_norm_smooth1 = 0.0f;\n";
+            if (adcCount > 1) appMain << "static float pot_norm_smooth2 = 0.0f;\n";
             appMain << "static const float pot_alpha = 0.1f;\n\n";
             appMain << "static void adc_init()\n{\n";
-            appMain << "    if (USE_ADC1) {\n";
-            appMain << "        adc1_config_width(POT_WIDTH);\n";
-            appMain << "        adc1_config_channel_atten(POT_ADC1_CH, POT_ATTEN);\n";
-            appMain << "        (void) esp_adc_cal_characterize(ADC_UNIT_1, POT_ATTEN, POT_WIDTH, DEFAULT_VREF_MV, &adc_chars);\n";
-            appMain << "    } else {\n";
-            appMain << "        adc2_config_channel_atten(POT_ADC2_CH, POT_ATTEN);\n";
-            appMain << "        (void) esp_adc_cal_characterize(ADC_UNIT_2, POT_ATTEN, POT_WIDTH, DEFAULT_VREF_MV, &adc_chars);\n";
-            appMain << "    }\n";
+            appMain << "    // Configure ADC1 width once; ADC2 width is specified per-read\n";
+            appMain << "    adc1_config_width(POT_WIDTH);\n";
+            appMain << "    if (USE_ADC1_1) { adc1_config_channel_atten(POT1_ADC1_CH, POT_ATTEN); (void) esp_adc_cal_characterize(ADC_UNIT_1, POT_ATTEN, POT_WIDTH, DEFAULT_VREF_MV, &adc_chars); } else { adc2_config_channel_atten(POT1_ADC2_CH, POT_ATTEN); (void) esp_adc_cal_characterize(ADC_UNIT_2, POT_ATTEN, POT_WIDTH, DEFAULT_VREF_MV, &adc_chars); }\n";
+            appMain << "    if (USE_ADC1_2) { adc1_config_channel_atten(POT2_ADC1_CH, POT_ATTEN); } else { adc2_config_channel_atten(POT2_ADC2_CH, POT_ATTEN); }\n";
             appMain << "}\n\n";
-            appMain << "static float pot_read_norm()\n{\n";
+            appMain << "static float pot1_read_norm()\n{\n";
             appMain << "    const int samples = 8;\n";
             appMain << "    uint32_t acc_raw = 0;\n";
             appMain << "    for (int i = 0; i < samples; i++) {\n";
-            appMain << "        if (USE_ADC1) acc_raw += adc1_get_raw(POT_ADC1_CH);\n";
-            appMain << "        else { int v = 0; adc2_get_raw(POT_ADC2_CH, POT_WIDTH, &v); acc_raw += (uint32_t)v; }\n";
+            appMain << "        if (USE_ADC1_1) acc_raw += adc1_get_raw(POT1_ADC1_CH);\n";
+            appMain << "        else { int v = 0; adc2_get_raw(POT1_ADC2_CH, POT_WIDTH, &v); acc_raw += (uint32_t)v; }\n";
             appMain << "    }\n";
             appMain << "    uint32_t raw = acc_raw / samples;\n";
-            appMain << "    // Fast normalize using raw range (12-bit -> 0..4095); avoids per-sample calibration overhead\n";
             appMain << "    float norm = (float)raw / 4095.0f;\n";
-            appMain << "    if (norm < 0.0f) { norm = 0.0f; }\n";
-            appMain << "    if (norm > 1.0f) { norm = 1.0f; }\n";
-            appMain << "    pot_norm_smooth += pot_alpha * (norm - pot_norm_smooth);\n";
-            appMain << "    return pot_norm_smooth;\n";
+            appMain << "    if (norm < 0.0f) norm = 0.0f;\n";
+            appMain << "    if (norm > 1.0f) norm = 1.0f;\n";
+            appMain << "    pot_norm_smooth1 += pot_alpha * (norm - pot_norm_smooth1);\n";
+            appMain << "    return pot_norm_smooth1;\n";
+            appMain << "}\n\n";
+            if (adcCount > 1) {
+                appMain << "static float pot2_read_norm()\n{\n";
+                appMain << "    const int samples = 8;\n";
+                appMain << "    uint32_t acc_raw = 0;\n";
+                appMain << "    for (int i = 0; i < samples; i++) {\n";
+                appMain << "        if (USE_ADC1_2) acc_raw += adc1_get_raw(POT2_ADC1_CH);\n";
+                appMain << "        else { int v = 0; adc2_get_raw(POT2_ADC2_CH, POT_WIDTH, &v); acc_raw += (uint32_t)v; }\n";
+                appMain << "    }\n";
+                appMain << "    uint32_t raw = acc_raw / samples;\n";
+                appMain << "    float norm = (float)raw / 4095.0f;\n";
+                appMain << "    if (norm < 0.0f) norm = 0.0f;\n";
+                appMain << "    if (norm > 1.0f) norm = 1.0f;\n";
+                appMain << "    pot_norm_smooth2 += pot_alpha * (norm - pot_norm_smooth2);\n";
+                appMain << "    return pot_norm_smooth2;\n";
+                appMain << "}\n\n";
+            }
+            // Background control task to read ADCs off the audio thread
+            appMain << "static volatile float pot1_norm_latest = 0.0f;\n";
+            if (adcCount > 1) appMain << "static volatile float pot2_norm_latest = 0.0f;\n";
+            appMain << "static void ctrl_task(void* arg)\n{\n";
+            appMain << "    (void)arg;\n";
+            appMain << "    while (1) {\n";
+            appMain << "        pot1_norm_latest = pot1_read_norm();\n";
+            if (adcCount > 1) appMain << "        pot2_norm_latest = pot2_read_norm();\n";
+            appMain << "        vTaskDelay(pdMS_TO_TICKS(10)); // ~100 Hz control rate\n";
+            appMain << "    }\n";
             appMain << "}\n\n";
             // Per-sample audio callback to match the known-good baseline; keep everything else unchanged
             appMain << "static void audio_callback()\n{\n";
@@ -889,21 +951,39 @@ public:
             appMain << "extern \"C\" void app_main(void)\n{\n";
             appMain << "    audio_init(sr);\n";
             appMain << "    hv_ctx = hv_Untitled_new(static_cast<double>(sr));\n";
-            appMain << "    hv_param_hash = hv_stringToHash(HV_PARAM_NAME);\n";
+            appMain << "    hv_param_hash1 = hv_stringToHash(HV_PARAM_NAME1);\n";
+            if (adcCount > 1) appMain << "    hv_param_hash2 = hv_stringToHash(HV_PARAM_NAME2);\n";
             appMain << "    int total = hv_getParameterInfo(hv_ctx, 0, NULL);\n";
-            appMain << "    hv_uint32_t fallback_hash = 0;\n";
+            appMain << "    hv_uint32_t fallback_hash1 = 0, fallback_hash2 = 0;\n";
+            appMain << "    float fb_min1 = 0.f, fb_max1 = 1.f, fb_min2 = 0.f, fb_max2 = 1.f;\n";
             appMain << "    for (int i = 0; i < total; i++) { HvParameterInfo info; hv_getParameterInfo(hv_ctx, i, &info);\n";
-            appMain << "        if (info.hash == hv_param_hash) { hv_param_min = info.minVal; hv_param_max = info.maxVal; fallback_hash = 0; break; }\n";
-            appMain << "        if (fallback_hash == 0 && info.type == HV_PARAM_TYPE_PARAMETER_IN) { fallback_hash = info.hash; hv_param_min = info.minVal; hv_param_max = info.maxVal; } }\n";
-            appMain << "    if (hv_param_hash == 0 && fallback_hash != 0) hv_param_hash = fallback_hash;\n";
+            appMain << "        if (info.hash == hv_param_hash1) { hv_param_min1 = info.minVal; hv_param_max1 = info.maxVal; }\n";
+            if (adcCount > 1) appMain << "        if (info.hash == hv_param_hash2) { hv_param_min2 = info.minVal; hv_param_max2 = info.maxVal; }\n";
+            appMain << "        if (info.type == HV_PARAM_TYPE_PARAMETER_IN) {\n";
+            appMain << "            if (fallback_hash1 == 0) { fallback_hash1 = info.hash; fb_min1 = info.minVal; fb_max1 = info.maxVal; }\n";
+            appMain << "            else if (fallback_hash2 == 0 && info.hash != fallback_hash1) { fallback_hash2 = info.hash; fb_min2 = info.minVal; fb_max2 = info.maxVal; }\n";
+            appMain << "        } }\n";
+            appMain << "    if (hv_param_hash1 == 0 && fallback_hash1 != 0) { hv_param_hash1 = fallback_hash1; hv_param_min1 = fb_min1; hv_param_max1 = fb_max1; }\n";
+            if (adcCount > 1) appMain << "    if (hv_param_hash2 == 0 && (fallback_hash2 != 0 || fallback_hash1 != 0)) { hv_param_hash2 = (fallback_hash2 != 0 ? fallback_hash2 : fallback_hash1); hv_param_min2 = (fallback_hash2 != 0 ? fb_min2 : fb_min1); hv_param_max2 = (fallback_hash2 != 0 ? fb_max2 : fb_max1); }\n";
             appMain << "    adc_init();\n";
+            appMain << "    // Start control task on core 0 to keep ADC reads off the audio loop\n";
+            appMain << "#if CONFIG_FREERTOS_UNICORE\n";
+            appMain << "    xTaskCreate(ctrl_task, \"ctrl\", 4096, NULL, 4, NULL);\n";
+            appMain << "#else\n";
+            appMain << "    xTaskCreatePinnedToCore(ctrl_task, \"ctrl\", 4096, NULL, 4, NULL, 0);\n";
+            appMain << "#endif\n";
             appMain << "    // Run in a tight loop: generate one sample and feed DAC; send control at a low cadence to avoid timing spikes\n";
             appMain << "    uint32_t ctr = 0;\n";
             appMain << "    while (1) {\n";
             appMain << "        if ((ctr++ & 0xFFu) == 0) {\n";
-            appMain << "            float norm = pot_read_norm();\n";
-            appMain << "            float mapped = hv_param_min + norm * (hv_param_max - hv_param_min);\n";
-            appMain << "            if (hv_param_hash != 0) hv_sendFloatToReceiver(hv_ctx, hv_param_hash, mapped);\n";
+            appMain << "            float norm1 = pot1_norm_latest;\n";
+            appMain << "            float mapped1 = hv_param_min1 + norm1 * (hv_param_max1 - hv_param_min1);\n";
+            appMain << "            if (hv_param_hash1 != 0) hv_sendFloatToReceiver(hv_ctx, hv_param_hash1, mapped1);\n";
+            if (adcCount > 1) {
+                appMain << "            float norm2 = pot2_norm_latest;\n";
+                appMain << "            float mapped2 = hv_param_min2 + norm2 * (hv_param_max2 - hv_param_min2);\n";
+                appMain << "            if (hv_param_hash2 != 0) hv_sendFloatToReceiver(hv_ctx, hv_param_hash2, mapped2);\n";
+            }
             appMain << "        }\n";
             appMain << "        audio_callback();\n";
             appMain << "    }\n";
