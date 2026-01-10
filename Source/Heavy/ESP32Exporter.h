@@ -824,6 +824,7 @@ public:
             appMain << "#include \"freertos/task.h\"\n";
             appMain << "#include \"config.h\"\n\n";
             appMain << "#include \"Heavy_Untitled.h\"\n\n";
+            appMain << "static const size_t AUDIO_BLOCK = " << String(blockSize) << ";\n";
             appMain << "static uint32_t sr = 48000;\n";
             appMain << "static HeavyContextInterface* hv_ctx = nullptr;\n\n";
             // Map selected GPIO pins to ADC unit/channel for up to two ADCs (declare both ADC1 and ADC2 constants)
@@ -942,11 +943,11 @@ public:
             appMain << "        vTaskDelay(pdMS_TO_TICKS(10)); // ~100 Hz control rate\n";
             appMain << "    }\n";
             appMain << "}\n\n";
-            // Per-sample audio callback to match the known-good baseline; keep everything else unchanged
+            // Block-based audio callback to avoid per-sample overhead and pops
             appMain << "static void audio_callback()\n{\n";
-            appMain << "    float outLR[2] = {0.f, 0.f};\n";
-            appMain << "    hv_processInlineInterleaved(hv_ctx, nullptr, outLR, 1);\n";
-            appMain << "    to_audio_write(outLR[0], outLR[1]);\n";
+            appMain << "    static float outLR[2*AUDIO_BLOCK];\n";
+            appMain << "    hv_processInlineInterleaved(hv_ctx, nullptr, outLR, AUDIO_BLOCK);\n";
+            appMain << "    to_audio_write_block(outLR, AUDIO_BLOCK);\n";
             appMain << "}\n\n";
             appMain << "extern \"C\" void app_main(void)\n{\n";
             appMain << "    audio_init(sr);\n";
@@ -972,19 +973,16 @@ public:
             appMain << "#else\n";
             appMain << "    xTaskCreatePinnedToCore(ctrl_task, \"ctrl\", 4096, NULL, 4, NULL, 0);\n";
             appMain << "#endif\n";
-            appMain << "    // Run in a tight loop: generate one sample and feed DAC; send control at a low cadence to avoid timing spikes\n";
-            appMain << "    uint32_t ctr = 0;\n";
+            appMain << "    // Tight loop: render/write one audio block; apply control updates per block\n";
             appMain << "    while (1) {\n";
-            appMain << "        if ((ctr++ & 0xFFu) == 0) {\n";
-            appMain << "            float norm1 = pot1_norm_latest;\n";
-            appMain << "            float mapped1 = hv_param_min1 + norm1 * (hv_param_max1 - hv_param_min1);\n";
-            appMain << "            if (hv_param_hash1 != 0) hv_sendFloatToReceiver(hv_ctx, hv_param_hash1, mapped1);\n";
+            appMain << "        float norm1 = pot1_norm_latest;\n";
+            appMain << "        float mapped1 = hv_param_min1 + norm1 * (hv_param_max1 - hv_param_min1);\n";
+            appMain << "        if (hv_param_hash1 != 0) hv_sendFloatToReceiver(hv_ctx, hv_param_hash1, mapped1);\n";
             if (adcCount > 1) {
-                appMain << "            float norm2 = pot2_norm_latest;\n";
-                appMain << "            float mapped2 = hv_param_min2 + norm2 * (hv_param_max2 - hv_param_min2);\n";
-                appMain << "            if (hv_param_hash2 != 0) hv_sendFloatToReceiver(hv_ctx, hv_param_hash2, mapped2);\n";
+                appMain << "        float norm2 = pot2_norm_latest;\n";
+                appMain << "        float mapped2 = hv_param_min2 + norm2 * (hv_param_max2 - hv_param_min2);\n";
+                appMain << "        if (hv_param_hash2 != 0) hv_sendFloatToReceiver(hv_ctx, hv_param_hash2, mapped2);\n";
             }
-            appMain << "        }\n";
             appMain << "        audio_callback();\n";
             appMain << "    }\n";
             appMain << "}\n";
