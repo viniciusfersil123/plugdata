@@ -95,6 +95,34 @@ private:
     std::function<void()> onAdd, onRemove;
 };
 
+// Custom property: Add/Remove Button controls in a single row
+class ButtonControlsProperty final : public PropertiesPanelProperty {
+public:
+    ButtonControlsProperty(std::function<void()> onAddFn, std::function<void()> onRemoveFn)
+        : PropertiesPanelProperty("Button Controls"), onAdd(std::move(onAddFn)), onRemove(std::move(onRemoveFn))
+    {
+        addButton.setButtonText("Add Button");
+        removeButton.setButtonText("Remove Button");
+        addButton.onClick = [this]{ if (onAdd) onAdd(); };
+        removeButton.onClick = [this]{ if (onRemove) onRemove(); };
+        addAndMakeVisible(addButton);
+        addAndMakeVisible(removeButton);
+    }
+
+    void resized() override
+    {
+        auto r = getLocalBounds().removeFromRight(getWidth() / (2 - hideLabel));
+        const int w = 120;
+        const int h = jmax(24, r.getHeight() - 6);
+        removeButton.setBounds(r.removeFromRight(w).withTrimmedTop(3).withHeight(h));
+        addButton.setBounds(r.removeFromRight(w).withTrimmedTop(3).withHeight(h));
+    }
+
+private:
+    TextButton addButton, removeButton;
+    std::function<void()> onAdd, onRemove;
+};
+
 // Convenience property: quickly enable a third potentiometer
 class AdcPreset3Property final : public PropertiesPanelProperty {
 public:
@@ -212,11 +240,13 @@ public:
     Value adcPollMsValue = SynchronousValue(var(10));
     PropertiesPanelProperty* adcPollMsProperty = nullptr;
 
-    // Button input: label and pin selection (similar to ADC)
-    Value buttonNameValue = SynchronousValue(var("Button1"));
-    Value buttonPinValue  = SynchronousValue(var(33));
-    PropertiesPanelProperty* buttonNameProperty = nullptr;
-    PropertiesPanelProperty* buttonPinProperty  = nullptr;
+    // Buttons GUI: allow adding/removing buttons with Name + Pin
+    static constexpr int kMaxButtons = 8;
+    Value buttonCountValue = SynchronousValue(var(1));
+    Value buttonNameValues[kMaxButtons];
+    Value buttonPinValues[kMaxButtons];
+    PropertiesPanelProperty* buttonNameProps[kMaxButtons] {};
+    PropertiesPanelProperty* buttonPinProps[kMaxButtons] {};
 
     ESP32Exporter(PluginEditor* editor, ExportingProgressView* exportingView)
         : ExporterBase(editor, exportingView)
@@ -345,15 +375,52 @@ public:
             panel.addSection("ADC Inputs", adcProps);
         }
 
-        // Button Input section (UI only)
+        // Buttons section (UI only)
         {
+            // Initialize defaults for button rows
+            for (int i = 0; i < kMaxButtons; ++i) {
+                buttonNameValues[i] = SynchronousValue(var("Button " + String(i + 1)));
+                int defaultPin = 0;
+                if (i == 0) defaultPin = 33; // GPIO33
+                else if (i == 1) defaultPin = 32; // GPIO32
+                else if (i == 2) defaultPin = 34; // GPIO34
+                buttonPinValues[i]  = SynchronousValue(var(defaultPin));
+            }
+
             PropertiesArray btnProps;
-            buttonNameProperty = new PropertiesPanel::EditableComponent<String>("Button Name", buttonNameValue);
-            buttonPinProperty  = new AdcPinProperty("Button Pin", buttonPinValue);
-            btnProps.add(buttonNameProperty);
-            btnProps.add(buttonPinProperty);
+            for (int i = 0; i < kMaxButtons; ++i) {
+                buttonNameProps[i] = new PropertiesPanel::EditableComponent<String>("Button " + String(i + 1) + " Name", buttonNameValues[i]);
+                buttonPinProps[i]  = new AdcPinProperty("Button " + String(i + 1) + " Pin", buttonPinValues[i]);
+                btnProps.add(buttonNameProps[i]);
+                btnProps.add(buttonPinProps[i]);
+            }
+
+            // Controls row for add/remove
+            auto* controls = new ButtonControlsProperty(
+                [this]{
+                    int count = getValue<int>(buttonCountValue);
+                    if (count < kMaxButtons) {
+                        buttonCountValue = count + 1;
+                        if (buttonNameProps[count]) buttonNameProps[count]->setVisible(true);
+                        if (buttonPinProps[count])  buttonPinProps[count]->setVisible(true);
+                        panel.updatePropHolderLayout();
+                    }
+                },
+                [this]{
+                    int count = getValue<int>(buttonCountValue);
+                    if (count > 0) {
+                        count -= 1;
+                        buttonCountValue = count;
+                        if (buttonNameProps[count]) buttonNameProps[count]->setVisible(false);
+                        if (buttonPinProps[count])  buttonPinProps[count]->setVisible(false);
+                        panel.updatePropHolderLayout();
+                    }
+                }
+            );
+            btnProps.add(controls);
+
             for (auto* property : btnProps) property->setPreferredHeight(28);
-            panel.addSection("Button Input", btnProps);
+            panel.addSection("Buttons", btnProps);
         }
 
         // Simplified panel: only a Flash button
@@ -489,9 +556,19 @@ public:
         // ADC (UI only)
     stateTree.setProperty("adcCountValue", getValue<int>(adcCountValue), nullptr);
     stateTree.setProperty("adcPollMsValue", getValue<int>(adcPollMsValue), nullptr);
-        // Button (UI only)
-        stateTree.setProperty("buttonNameValue", getValue<String>(buttonNameValue), nullptr);
-        stateTree.setProperty("buttonPinValue", getValue<int>(buttonPinValue), nullptr);
+        // Buttons (UI only)
+        stateTree.setProperty("buttonCountValue", getValue<int>(buttonCountValue), nullptr);
+        {
+            ValueTree btnTree("ButtonInputs");
+            int bcount = jlimit(0, kMaxButtons, getValue<int>(buttonCountValue));
+            for (int i = 0; i < bcount; ++i) {
+                ValueTree item("Button");
+                item.setProperty("name", getValue<String>(buttonNameValues[i]), nullptr);
+                item.setProperty("pin",  getValue<int>(buttonPinValues[i]), nullptr);
+                btnTree.addChild(item, -1, nullptr);
+            }
+            stateTree.addChild(btnTree, -1, nullptr);
+        }
         ValueTree adcTree("ADCInputs");
         int count = jlimit(0, kMaxAdc, getValue<int>(adcCountValue));
         for (int i = 0; i < count; ++i) {
@@ -548,9 +625,16 @@ public:
         // ADC (UI only)
         if (tree.hasProperty("adcCountValue")) adcCountValue = tree.getProperty("adcCountValue");
     if (tree.hasProperty("adcPollMsValue")) adcPollMsValue = tree.getProperty("adcPollMsValue");
-        // Button (UI only)
-        if (tree.hasProperty("buttonNameValue")) buttonNameValue = tree.getProperty("buttonNameValue");
-        if (tree.hasProperty("buttonPinValue"))  buttonPinValue  = tree.getProperty("buttonPinValue");
+        // Buttons (UI only)
+        if (tree.hasProperty("buttonCountValue")) buttonCountValue = tree.getProperty("buttonCountValue");
+        if (auto btnTree = tree.getChildWithName("ButtonInputs"); btnTree.isValid()) {
+            auto bcount = jmin(btnTree.getNumChildren(), kMaxButtons);
+            for (int i = 0; i < bcount; ++i) {
+                auto item = btnTree.getChild(i);
+                if (item.hasProperty("name")) buttonNameValues[i] = item.getProperty("name");
+                if (item.hasProperty("pin"))  buttonPinValues[i]  = item.getProperty("pin");
+            }
+        }
         if (auto adcTree = tree.getChildWithName("ADCInputs"); adcTree.isValid()) {
             auto count = jmin(adcTree.getNumChildren(), kMaxAdc);
             for (int i = 0; i < count; ++i) {
@@ -566,6 +650,15 @@ public:
                 const bool vis = (i < count);
                 if (adcNameProps[i]) adcNameProps[i]->setVisible(vis);
                 if (adcPinProps[i])  adcPinProps[i]->setVisible(vis);
+            }
+            panel.updatePropHolderLayout();
+        }
+        {
+            int bcount = jlimit(0, kMaxButtons, getValue<int>(buttonCountValue));
+            for (int i = 0; i < kMaxButtons; ++i) {
+                const bool vis = (i < bcount);
+                if (buttonNameProps[i]) buttonNameProps[i]->setVisible(vis);
+                if (buttonPinProps[i])  buttonPinProps[i]->setVisible(vis);
             }
             panel.updatePropHolderLayout();
         }
@@ -889,19 +982,29 @@ public:
             appMain << "static const size_t AUDIO_BLOCK = " << String(blockSize) << ";\n";
             appMain << "static uint32_t sr = 48000;\n";
             appMain << "static HeavyContextInterface* hv_ctx = nullptr;\n\n";
-            // Button: active-low with internal pull-up, bang-only (label and pin from UI)
-            int btnPin = getValue<int>(buttonPinValue);
-            if (btnPin <= 0) btnPin = 33;
-            String btnName = getValue<String>(buttonNameValue);
-            if (btnName.isEmpty()) btnName = "Button1";
-            appMain << "static const int BTN_PIN = " << String(btnPin) << ";\n";
-            appMain << "static const char* BTN_NAME = " << btnName.quoted() << ";\n";
-            appMain << "static hv_uint32_t hv_btn_hash = 0;\n";
-            appMain << "static volatile uint8_t btn_bang_dirty = 0;\n";
-            appMain << "static volatile float btn_bang_value = 0.0f;\n";
-            appMain << "static volatile int btn_prev_level = 1;\n";
-            appMain << "static const TickType_t BTN_DEBOUNCE_TICKS = pdMS_TO_TICKS(20);\n";
-            appMain << "static volatile TickType_t btn_last_tick = 0;\n\n";
+            // Buttons: active-low with internal pull-up, bang-only (labels and pins from UI)
+            int btnCount = jlimit(0, kMaxButtons, getValue<int>(buttonCountValue));
+            appMain << "static const int kBtnCount = " << String(btnCount) << ";\n";
+            if (btnCount > 0) {
+                String pins("static const int BTN_PINS[" + String(btnCount) + "] = { ");
+                String names("static const char* BTN_NAMES[" + String(btnCount) + "] = { ");
+                for (int i = 0; i < btnCount; ++i) {
+                    int pin = getValue<int>(buttonPinValues[i]);
+                    if (pin <= 0) pin = (i == 0 ? 33 : (i == 1 ? 32 : 34));
+                    String nm = getValue<String>(buttonNameValues[i]);
+                    if (nm.isEmpty()) nm = String("Button ") + String(i + 1);
+                    pins << String(pin);
+                    names << nm.quoted();
+                    if (i < btnCount - 1) { pins << ", "; names << ", "; }
+                }
+                pins << " };\n"; names << " };\n";
+                appMain << pins << names;
+                appMain << "static hv_uint32_t hv_btn_hash[" << String(btnCount) << "] = { 0 };\n";
+                appMain << "static volatile uint8_t btn_bang_dirty[" << String(btnCount) << "] = { 0 };\n";
+                appMain << "static volatile int btn_prev_level[" << String(btnCount) << "] = { 1 };\n";
+                appMain << "static const TickType_t BTN_DEBOUNCE_TICKS = pdMS_TO_TICKS(20);\n";
+                appMain << "static volatile TickType_t btn_last_tick[" << String(btnCount) << "] = { 0 };\n\n";
+            }
             appMain << "static const int kAdcCount = " << String(adcCount) << ";\n";
             if (adcCount > 0) {
                 String useArr("static const bool use_adc1[" + String(adcCount) + "] = { ");
@@ -958,11 +1061,12 @@ public:
                 appMain << "static volatile float pot_norm_latest[" << String(adcCount) << "] = { 0 } ;\n";
                 appMain << "static volatile uint8_t pot_dirty[" << String(adcCount) << "] = { 0 } ;\n";
                 int pollMs = jlimit(1, 100, getValue<int>(adcPollMsValue));
-                appMain << "static void ctrl_task(void* arg)\n{ (void)arg; int idx = 0; const TickType_t tick = pdMS_TO_TICKS(" << String(pollMs) << "); while (1) { pot_norm_latest[idx] = pot_read_norm(idx); pot_dirty[idx] = 1; idx = (idx + 1) % kAdcCount; int level = gpio_get_level((gpio_num_t) BTN_PIN); TickType_t now = xTaskGetTickCount(); if (level != btn_prev_level && (now - btn_last_tick) >= BTN_DEBOUNCE_TICKS) { btn_last_tick = now; if (btn_prev_level == 1 && level == 0) { btn_prev_level = 0; ESP_LOGI(TAG, \"Button1 DOWN\"); btn_bang_value = 1.0f; btn_bang_dirty = 1; } else if (btn_prev_level == 0 && level == 1) { btn_prev_level = 1; ESP_LOGI(TAG, \"Button1 UP\"); } } vTaskDelay(tick); } }\n\n";
+                appMain << "static void ctrl_task(void* arg)\n{ (void)arg; int idx = 0; const TickType_t tick = pdMS_TO_TICKS(" << String(pollMs) << "); while (1) { pot_norm_latest[idx] = pot_read_norm(idx); pot_dirty[idx] = 1; idx = (idx + 1) % kAdcCount; ";
+                appMain << " if (kBtnCount > 0) { for (int b = 0; b < kBtnCount; ++b) { int level = gpio_get_level((gpio_num_t) BTN_PINS[b]); TickType_t now = xTaskGetTickCount(); if (level != btn_prev_level[b] && (now - btn_last_tick[b]) >= BTN_DEBOUNCE_TICKS) { btn_last_tick[b] = now; if (btn_prev_level[b] == 1 && level == 0) { btn_prev_level[b] = 0; ESP_LOGI(TAG, \"%s DOWN\", BTN_NAMES[b]); btn_bang_dirty[b] = 1; } else if (btn_prev_level[b] == 0 && level == 1) { btn_prev_level[b] = 1; ESP_LOGI(TAG, \"%s UP\", BTN_NAMES[b]); } } } } vTaskDelay(tick); } }\n\n";
             } else {
                 appMain << "static void adc_init(){}\n\n";
                 int pollMsNoAdc = jlimit(1, 100, getValue<int>(adcPollMsValue));
-                appMain << "static void ctrl_task(void* arg)\n{ (void)arg; const TickType_t tick = pdMS_TO_TICKS(" << String(pollMsNoAdc) << "); while (1) { int level = gpio_get_level((gpio_num_t) BTN_PIN); TickType_t now = xTaskGetTickCount(); if (level != btn_prev_level && (now - btn_last_tick) >= BTN_DEBOUNCE_TICKS) { btn_last_tick = now; if (btn_prev_level == 1 && level == 0) { btn_prev_level = 0; ESP_LOGI(TAG, \"Button1 DOWN\"); btn_bang_value = 1.0f; btn_bang_dirty = 1; } else if (btn_prev_level == 0 && level == 1) { btn_prev_level = 1; ESP_LOGI(TAG, \"Button1 UP\"); } } vTaskDelay(tick); } }\n\n";
+                appMain << "static void ctrl_task(void* arg)\n{ (void)arg; const TickType_t tick = pdMS_TO_TICKS(" << String(pollMsNoAdc) << "); while (1) { if (kBtnCount > 0) { for (int b = 0; b < kBtnCount; ++b) { int level = gpio_get_level((gpio_num_t) BTN_PINS[b]); TickType_t now = xTaskGetTickCount(); if (level != btn_prev_level[b] && (now - btn_last_tick[b]) >= BTN_DEBOUNCE_TICKS) { btn_last_tick[b] = now; if (btn_prev_level[b] == 1 && level == 0) { btn_prev_level[b] = 0; ESP_LOGI(TAG, \"%s DOWN\", BTN_NAMES[b]); btn_bang_dirty[b] = 1; } else if (btn_prev_level[b] == 0 && level == 1) { btn_prev_level[b] = 1; ESP_LOGI(TAG, \"%s UP\", BTN_NAMES[b]); } } } } vTaskDelay(tick); } }\n\n";
             }
             appMain << "static void audio_callback()\n{ static float outLR[2*AUDIO_BLOCK]; hv_processInlineInterleaved(hv_ctx, nullptr, outLR, AUDIO_BLOCK); to_audio_write_block(outLR, AUDIO_BLOCK); }\n\n";
             appMain << "extern \"C\" void app_main(void)\n{ audio_init(sr); hv_ctx = hv_Untitled_new(static_cast<double>(sr)); ";
@@ -970,8 +1074,11 @@ public:
                 appMain << "for (int i = 0; i < kAdcCount; ++i) hv_param_hash[i] = hv_stringToHash(HV_PARAM_NAME[i]); int total = hv_getParameterInfo(hv_ctx, 0, NULL); hv_uint32_t fallback_hash = 0; float fb_min = 0.f, fb_max = 1.f; for (int p = 0; p < total; ++p) { HvParameterInfo info; hv_getParameterInfo(hv_ctx, p, &info); for (int i = 0; i < kAdcCount; ++i) { if (info.hash == hv_param_hash[i]) { hv_param_min[i] = info.minVal; hv_param_max[i] = info.maxVal; } } if (info.type == HV_PARAM_TYPE_PARAMETER_IN && fallback_hash == 0) { fallback_hash = info.hash; fb_min = info.minVal; fb_max = info.maxVal; } } for (int i = 0; i < kAdcCount; ++i) { if (hv_param_hash[i] == 0 && fallback_hash != 0) { hv_param_hash[i] = fallback_hash; hv_param_min[i] = fb_min; hv_param_max[i] = fb_max; } } ";
             }
             appMain << "adc_init();\n";
-            appMain << "hv_btn_hash = hv_stringToHash(BTN_NAME);\n";
-            appMain << "{ gpio_config_t io = {}; io.intr_type = GPIO_INTR_DISABLE; io.mode = GPIO_MODE_INPUT; io.pin_bit_mask = (1ULL << BTN_PIN); io.pull_down_en = GPIO_PULLDOWN_DISABLE; io.pull_up_en = GPIO_PULLUP_ENABLE; gpio_config(&io); gpio_pullup_en((gpio_num_t)BTN_PIN); btn_prev_level = gpio_get_level((gpio_num_t) BTN_PIN); }\n";
+            if (btnCount > 0) {
+                appMain << "for (int b = 0; b < kBtnCount; ++b) hv_btn_hash[b] = hv_stringToHash(BTN_NAMES[b]);\n";
+                // Configure all button pins as inputs with pull-ups
+                appMain << "{ gpio_config_t io = {}; io.intr_type = GPIO_INTR_DISABLE; io.mode = GPIO_MODE_INPUT; uint64_t mask = 0; for (int b = 0; b < kBtnCount; ++b) mask |= (1ULL << BTN_PINS[b]); io.pin_bit_mask = mask; io.pull_down_en = GPIO_PULLDOWN_DISABLE; io.pull_up_en = GPIO_PULLUP_ENABLE; gpio_config(&io); for (int b = 0; b < kBtnCount; ++b) { gpio_pullup_en((gpio_num_t)BTN_PINS[b]); btn_prev_level[b] = gpio_get_level((gpio_num_t) BTN_PINS[b]); } }\n";
+            }
             appMain << "#if CONFIG_FREERTOS_UNICORE\n";
             appMain << "    xTaskCreate(ctrl_task, \"ctrl\", 4096, NULL, 4, NULL);\n";
             appMain << "#else\n";
@@ -979,7 +1086,7 @@ public:
             appMain << "#endif\n";
             appMain << "    while (1) { ";
             if (adcCount > 0) appMain << "{ for (int i = 0; i < kAdcCount; ++i) { if (pot_dirty[i]) { pot_dirty[i] = 0; float norm = pot_norm_latest[i]; float mapped = hv_param_min[i] + norm * (hv_param_max[i] - hv_param_min[i]); if (hv_param_hash[i] != 0) hv_sendFloatToReceiver(hv_ctx, hv_param_hash[i], mapped); break; } } } ";
-            appMain << "if (btn_bang_dirty) { btn_bang_dirty = 0; hv_sendBangToReceiver(hv_ctx, hv_btn_hash); } ";
+            if (btnCount > 0) appMain << "{ for (int b = 0; b < kBtnCount; ++b) { if (btn_bang_dirty[b]) { btn_bang_dirty[b] = 0; hv_sendBangToReceiver(hv_ctx, hv_btn_hash[b]); break; } } } ";
             appMain << "audio_callback(); } }\n";
             mainDir.getChildFile("app_main.cpp").replaceWithText(appMain);
         }
