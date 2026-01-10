@@ -212,6 +212,12 @@ public:
     Value adcPollMsValue = SynchronousValue(var(10));
     PropertiesPanelProperty* adcPollMsProperty = nullptr;
 
+    // Button input: label and pin selection (similar to ADC)
+    Value buttonNameValue = SynchronousValue(var("Button1"));
+    Value buttonPinValue  = SynchronousValue(var(33));
+    PropertiesPanelProperty* buttonNameProperty = nullptr;
+    PropertiesPanelProperty* buttonPinProperty  = nullptr;
+
     ESP32Exporter(PluginEditor* editor, ExportingProgressView* exportingView)
         : ExporterBase(editor, exportingView)
     {
@@ -337,6 +343,17 @@ public:
             adcProps.add(adcPollMsProperty);
             for (auto* property : adcProps) property->setPreferredHeight(28);
             panel.addSection("ADC Inputs", adcProps);
+        }
+
+        // Button Input section (UI only)
+        {
+            PropertiesArray btnProps;
+            buttonNameProperty = new PropertiesPanel::EditableComponent<String>("Button Name", buttonNameValue);
+            buttonPinProperty  = new AdcPinProperty("Button Pin", buttonPinValue);
+            btnProps.add(buttonNameProperty);
+            btnProps.add(buttonPinProperty);
+            for (auto* property : btnProps) property->setPreferredHeight(28);
+            panel.addSection("Button Input", btnProps);
         }
 
         // Simplified panel: only a Flash button
@@ -472,6 +489,9 @@ public:
         // ADC (UI only)
     stateTree.setProperty("adcCountValue", getValue<int>(adcCountValue), nullptr);
     stateTree.setProperty("adcPollMsValue", getValue<int>(adcPollMsValue), nullptr);
+        // Button (UI only)
+        stateTree.setProperty("buttonNameValue", getValue<String>(buttonNameValue), nullptr);
+        stateTree.setProperty("buttonPinValue", getValue<int>(buttonPinValue), nullptr);
         ValueTree adcTree("ADCInputs");
         int count = jlimit(0, kMaxAdc, getValue<int>(adcCountValue));
         for (int i = 0; i < count; ++i) {
@@ -528,6 +548,9 @@ public:
         // ADC (UI only)
         if (tree.hasProperty("adcCountValue")) adcCountValue = tree.getProperty("adcCountValue");
     if (tree.hasProperty("adcPollMsValue")) adcPollMsValue = tree.getProperty("adcPollMsValue");
+        // Button (UI only)
+        if (tree.hasProperty("buttonNameValue")) buttonNameValue = tree.getProperty("buttonNameValue");
+        if (tree.hasProperty("buttonPinValue"))  buttonPinValue  = tree.getProperty("buttonPinValue");
         if (auto adcTree = tree.getChildWithName("ADCInputs"); adcTree.isValid()) {
             auto count = jmin(adcTree.getNumChildren(), kMaxAdc);
             for (int i = 0; i < count; ++i) {
@@ -866,9 +889,13 @@ public:
             appMain << "static const size_t AUDIO_BLOCK = " << String(blockSize) << ";\n";
             appMain << "static uint32_t sr = 48000;\n";
             appMain << "static HeavyContextInterface* hv_ctx = nullptr;\n\n";
-            // Hardwired button: GPIO33 active-low with internal pull-up, bang-only
-            appMain << "static const int BTN_PIN = 33;\n";
-            appMain << "static const char* BTN_NAME = \"Button1\";\n";
+            // Button: active-low with internal pull-up, bang-only (label and pin from UI)
+            int btnPin = getValue<int>(buttonPinValue);
+            if (btnPin <= 0) btnPin = 33;
+            String btnName = getValue<String>(buttonNameValue);
+            if (btnName.isEmpty()) btnName = "Button1";
+            appMain << "static const int BTN_PIN = " << String(btnPin) << ";\n";
+            appMain << "static const char* BTN_NAME = " << btnName.quoted() << ";\n";
             appMain << "static hv_uint32_t hv_btn_hash = 0;\n";
             appMain << "static volatile uint8_t btn_bang_dirty = 0;\n";
             appMain << "static volatile float btn_bang_value = 0.0f;\n";
