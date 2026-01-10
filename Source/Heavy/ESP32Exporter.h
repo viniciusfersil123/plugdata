@@ -858,11 +858,23 @@ public:
             appMain << "#include \"esp_adc_cal.h\"\n";
             appMain << "#include \"freertos/FreeRTOS.h\"\n";
             appMain << "#include \"freertos/task.h\"\n";
+            appMain << "#include \"driver/gpio.h\"\n";
+            appMain << "#include \"esp_log.h\"\n";
             appMain << "#include \"config.h\"\n\n";
             appMain << "#include \"Heavy_Untitled.h\"\n\n";
+            appMain << "static const char* TAG = \"plugdata_esp\";\n";
             appMain << "static const size_t AUDIO_BLOCK = " << String(blockSize) << ";\n";
             appMain << "static uint32_t sr = 48000;\n";
             appMain << "static HeavyContextInterface* hv_ctx = nullptr;\n\n";
+            // Hardwired button: GPIO33 active-low with internal pull-up, bang-only
+            appMain << "static const int BTN_PIN = 33;\n";
+            appMain << "static const char* BTN_NAME = \"Button1\";\n";
+            appMain << "static hv_uint32_t hv_btn_hash = 0;\n";
+            appMain << "static volatile uint8_t btn_bang_dirty = 0;\n";
+            appMain << "static volatile float btn_bang_value = 0.0f;\n";
+            appMain << "static volatile int btn_prev_level = 1;\n";
+            appMain << "static const TickType_t BTN_DEBOUNCE_TICKS = pdMS_TO_TICKS(20);\n";
+            appMain << "static volatile TickType_t btn_last_tick = 0;\n\n";
             appMain << "static const int kAdcCount = " << String(adcCount) << ";\n";
             if (adcCount > 0) {
                 String useArr("static const bool use_adc1[" + String(adcCount) + "] = { ");
@@ -919,9 +931,11 @@ public:
                 appMain << "static volatile float pot_norm_latest[" << String(adcCount) << "] = { 0 } ;\n";
                 appMain << "static volatile uint8_t pot_dirty[" << String(adcCount) << "] = { 0 } ;\n";
                 int pollMs = jlimit(1, 100, getValue<int>(adcPollMsValue));
-                appMain << "static void ctrl_task(void* arg)\n{ (void)arg; int idx = 0; const TickType_t tick = pdMS_TO_TICKS(" << String(pollMs) << "); while (1) { pot_norm_latest[idx] = pot_read_norm(idx); pot_dirty[idx] = 1; idx = (idx + 1) % kAdcCount; vTaskDelay(tick); } }\n\n";
+                appMain << "static void ctrl_task(void* arg)\n{ (void)arg; int idx = 0; const TickType_t tick = pdMS_TO_TICKS(" << String(pollMs) << "); while (1) { pot_norm_latest[idx] = pot_read_norm(idx); pot_dirty[idx] = 1; idx = (idx + 1) % kAdcCount; int level = gpio_get_level((gpio_num_t) BTN_PIN); TickType_t now = xTaskGetTickCount(); if (level != btn_prev_level && (now - btn_last_tick) >= BTN_DEBOUNCE_TICKS) { btn_last_tick = now; if (btn_prev_level == 1 && level == 0) { btn_prev_level = 0; ESP_LOGI(TAG, \"Button1 DOWN\"); btn_bang_value = 1.0f; btn_bang_dirty = 1; } else if (btn_prev_level == 0 && level == 1) { btn_prev_level = 1; ESP_LOGI(TAG, \"Button1 UP\"); } } vTaskDelay(tick); } }\n\n";
             } else {
                 appMain << "static void adc_init(){}\n\n";
+                int pollMsNoAdc = jlimit(1, 100, getValue<int>(adcPollMsValue));
+                appMain << "static void ctrl_task(void* arg)\n{ (void)arg; const TickType_t tick = pdMS_TO_TICKS(" << String(pollMsNoAdc) << "); while (1) { int level = gpio_get_level((gpio_num_t) BTN_PIN); TickType_t now = xTaskGetTickCount(); if (level != btn_prev_level && (now - btn_last_tick) >= BTN_DEBOUNCE_TICKS) { btn_last_tick = now; if (btn_prev_level == 1 && level == 0) { btn_prev_level = 0; ESP_LOGI(TAG, \"Button1 DOWN\"); btn_bang_value = 1.0f; btn_bang_dirty = 1; } else if (btn_prev_level == 0 && level == 1) { btn_prev_level = 1; ESP_LOGI(TAG, \"Button1 UP\"); } } vTaskDelay(tick); } }\n\n";
             }
             appMain << "static void audio_callback()\n{ static float outLR[2*AUDIO_BLOCK]; hv_processInlineInterleaved(hv_ctx, nullptr, outLR, AUDIO_BLOCK); to_audio_write_block(outLR, AUDIO_BLOCK); }\n\n";
             appMain << "extern \"C\" void app_main(void)\n{ audio_init(sr); hv_ctx = hv_Untitled_new(static_cast<double>(sr)); ";
@@ -929,13 +943,16 @@ public:
                 appMain << "for (int i = 0; i < kAdcCount; ++i) hv_param_hash[i] = hv_stringToHash(HV_PARAM_NAME[i]); int total = hv_getParameterInfo(hv_ctx, 0, NULL); hv_uint32_t fallback_hash = 0; float fb_min = 0.f, fb_max = 1.f; for (int p = 0; p < total; ++p) { HvParameterInfo info; hv_getParameterInfo(hv_ctx, p, &info); for (int i = 0; i < kAdcCount; ++i) { if (info.hash == hv_param_hash[i]) { hv_param_min[i] = info.minVal; hv_param_max[i] = info.maxVal; } } if (info.type == HV_PARAM_TYPE_PARAMETER_IN && fallback_hash == 0) { fallback_hash = info.hash; fb_min = info.minVal; fb_max = info.maxVal; } } for (int i = 0; i < kAdcCount; ++i) { if (hv_param_hash[i] == 0 && fallback_hash != 0) { hv_param_hash[i] = fallback_hash; hv_param_min[i] = fb_min; hv_param_max[i] = fb_max; } } ";
             }
             appMain << "adc_init();\n";
+            appMain << "hv_btn_hash = hv_stringToHash(BTN_NAME);\n";
+            appMain << "{ gpio_config_t io = {}; io.intr_type = GPIO_INTR_DISABLE; io.mode = GPIO_MODE_INPUT; io.pin_bit_mask = (1ULL << BTN_PIN); io.pull_down_en = GPIO_PULLDOWN_DISABLE; io.pull_up_en = GPIO_PULLUP_ENABLE; gpio_config(&io); gpio_pullup_en((gpio_num_t)BTN_PIN); btn_prev_level = gpio_get_level((gpio_num_t) BTN_PIN); }\n";
             appMain << "#if CONFIG_FREERTOS_UNICORE\n";
-            appMain << "    if (kAdcCount > 0) xTaskCreate(ctrl_task, \"ctrl\", 4096, NULL, 4, NULL);\n";
+            appMain << "    xTaskCreate(ctrl_task, \"ctrl\", 4096, NULL, 4, NULL);\n";
             appMain << "#else\n";
-            appMain << "    if (kAdcCount > 0) xTaskCreatePinnedToCore(ctrl_task, \"ctrl\", 4096, NULL, 4, NULL, 0);\n";
+            appMain << "    xTaskCreatePinnedToCore(ctrl_task, \"ctrl\", 4096, NULL, 4, NULL, 0);\n";
             appMain << "#endif\n";
             appMain << "    while (1) { ";
             if (adcCount > 0) appMain << "{ for (int i = 0; i < kAdcCount; ++i) { if (pot_dirty[i]) { pot_dirty[i] = 0; float norm = pot_norm_latest[i]; float mapped = hv_param_min[i] + norm * (hv_param_max[i] - hv_param_min[i]); if (hv_param_hash[i] != 0) hv_sendFloatToReceiver(hv_ctx, hv_param_hash[i], mapped); break; } } } ";
+            appMain << "if (btn_bang_dirty) { btn_bang_dirty = 0; hv_sendBangToReceiver(hv_ctx, hv_btn_hash); } ";
             appMain << "audio_callback(); } }\n";
             mainDir.getChildFile("app_main.cpp").replaceWithText(appMain);
         }
