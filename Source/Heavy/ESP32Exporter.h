@@ -239,6 +239,19 @@ public:
     // ADC poll period control
     Value adcPollMsValue = SynchronousValue(var(10));
     PropertiesPanelProperty* adcPollMsProperty = nullptr;
+    // ADC advanced options
+    Value adcAdvancedOptionsValue = SynchronousValue(var(false));
+    Value adcWidthValue = SynchronousValue(var(12));
+    Value adcAttenValue = SynchronousValue(var(11));
+    Value adcSamplesValue = SynchronousValue(var(8));
+    Value adcUseCalibrationValue = SynchronousValue(var(false));
+    Value adcDefaultVrefMvValue = SynchronousValue(var(1100));
+    PropertiesPanelProperty* adcAdvancedToggleProperty = nullptr;
+    PropertiesPanelProperty* adcWidthProperty = nullptr;
+    PropertiesPanelProperty* adcAttenProperty = nullptr;
+    PropertiesPanelProperty* adcSamplesProperty = nullptr;
+    PropertiesPanelProperty* adcUseCalibrationProperty = nullptr;
+    PropertiesPanelProperty* adcDefaultVrefProperty = nullptr;
 
     // Buttons GUI: allow adding/removing buttons with Name + Pin
     static constexpr int kMaxButtons = 8;
@@ -339,6 +352,9 @@ public:
             }
 
             PropertiesArray adcProps;
+            // Advanced toggle first
+            adcAdvancedToggleProperty = new PropertiesPanel::BoolComponent("Advanced ADC options", adcAdvancedOptionsValue, { "Off", "On" });
+            adcProps.add(adcAdvancedToggleProperty);
             for (int i = 0; i < kMaxAdc; ++i) {
                 adcNameProps[i] = new PropertiesPanel::EditableComponent<String>("ADC " + String(i + 1) + " Name", adcNameValues[i]);
                 adcPinProps[i]  = new AdcPinProperty("ADC " + String(i + 1) + " Pin", adcPinValues[i]);
@@ -371,6 +387,17 @@ public:
             // ADC poll period (ms), controls how often ADCs are sampled off the audio thread
             adcPollMsProperty = new PropertiesPanel::EditableComponent<int>("ADC poll period (ms)", adcPollMsValue, 1, 100);
             adcProps.add(adcPollMsProperty);
+            // Advanced fields
+            adcWidthProperty = new PropertiesPanel::ComboComponent("ADC width (bits)", adcWidthValue, { "9", "10", "11", "12" });
+            adcAttenProperty = new PropertiesPanel::ComboComponent("ADC attenuation (dB)", adcAttenValue, { "0", "2.5", "6", "11" });
+            adcSamplesProperty = new PropertiesPanel::EditableComponent<int>("ADC samples per read", adcSamplesValue, 1, 64);
+            adcUseCalibrationProperty = new PropertiesPanel::BoolComponent("Use ADC calibration", adcUseCalibrationValue, { "No", "Yes" });
+            adcDefaultVrefProperty = new PropertiesPanel::EditableComponent<int>("Default Vref (mV)", adcDefaultVrefMvValue, 900, 1300);
+            adcProps.add(adcWidthProperty);
+            adcProps.add(adcAttenProperty);
+            adcProps.add(adcSamplesProperty);
+            adcProps.add(adcUseCalibrationProperty);
+            adcProps.add(adcDefaultVrefProperty);
             for (auto* property : adcProps) property->setPreferredHeight(28);
             panel.addSection("ADC Inputs", adcProps);
         }
@@ -452,6 +479,8 @@ public:
         i2sUseMclkValue.addListener(this);
         i2sUseDinValue.addListener(this);
         i2sAdvancedOptionsValue.addListener(this);
+    // ADC advanced toggle listener
+    adcAdvancedOptionsValue.addListener(this);
         // Initial enable state
         auto initVisibility = [this]() {
             bool const useDac = getValue<int>(audioOutputValue) == 1;
@@ -504,6 +533,14 @@ public:
                 if (adcNameProps[i]) adcNameProps[i]->setVisible(vis);
                 if (adcPinProps[i])  adcPinProps[i]->setVisible(vis);
             }
+            // Advanced ADC visibility
+            bool const adcAdvOn = getValue<bool>(adcAdvancedOptionsValue);
+            auto setAdcAdvVis = [adcAdvOn](PropertiesPanelProperty* p){ if (p) p->setVisible(adcAdvOn); };
+            setAdcAdvVis(adcWidthProperty);
+            setAdcAdvVis(adcAttenProperty);
+            setAdcAdvVis(adcSamplesProperty);
+            setAdcAdvVis(adcUseCalibrationProperty);
+            setAdcAdvVis(adcDefaultVrefProperty);
             panel.updatePropHolderLayout();
         };
         initVisibility();
@@ -554,8 +591,14 @@ public:
         stateTree.setProperty("i2sInvertWsValue", getValue<bool>(i2sInvertWsValue), nullptr);
         stateTree.setProperty("i2sWriteTimeoutMsValue", getValue<int>(i2sWriteTimeoutMsValue), nullptr);
         // ADC (UI only)
-    stateTree.setProperty("adcCountValue", getValue<int>(adcCountValue), nullptr);
-    stateTree.setProperty("adcPollMsValue", getValue<int>(adcPollMsValue), nullptr);
+        stateTree.setProperty("adcCountValue", getValue<int>(adcCountValue), nullptr);
+        stateTree.setProperty("adcPollMsValue", getValue<int>(adcPollMsValue), nullptr);
+        stateTree.setProperty("adcAdvancedOptionsValue", getValue<bool>(adcAdvancedOptionsValue), nullptr);
+        stateTree.setProperty("adcWidthValue", getValue<int>(adcWidthValue), nullptr);
+        stateTree.setProperty("adcAttenValue", getValue<int>(adcAttenValue), nullptr);
+        stateTree.setProperty("adcSamplesValue", getValue<int>(adcSamplesValue), nullptr);
+        stateTree.setProperty("adcUseCalibrationValue", getValue<bool>(adcUseCalibrationValue), nullptr);
+        stateTree.setProperty("adcDefaultVrefMvValue", getValue<int>(adcDefaultVrefMvValue), nullptr);
         // Buttons (UI only)
         stateTree.setProperty("buttonCountValue", getValue<int>(buttonCountValue), nullptr);
         {
@@ -624,7 +667,13 @@ public:
         if (tree.hasProperty("i2sWriteTimeoutMsValue")) i2sWriteTimeoutMsValue = tree.getProperty("i2sWriteTimeoutMsValue");
         // ADC (UI only)
         if (tree.hasProperty("adcCountValue")) adcCountValue = tree.getProperty("adcCountValue");
-    if (tree.hasProperty("adcPollMsValue")) adcPollMsValue = tree.getProperty("adcPollMsValue");
+        if (tree.hasProperty("adcPollMsValue")) adcPollMsValue = tree.getProperty("adcPollMsValue");
+        if (tree.hasProperty("adcAdvancedOptionsValue")) adcAdvancedOptionsValue = tree.getProperty("adcAdvancedOptionsValue");
+        if (tree.hasProperty("adcWidthValue")) adcWidthValue = tree.getProperty("adcWidthValue");
+        if (tree.hasProperty("adcAttenValue")) adcAttenValue = tree.getProperty("adcAttenValue");
+        if (tree.hasProperty("adcSamplesValue")) adcSamplesValue = tree.getProperty("adcSamplesValue");
+        if (tree.hasProperty("adcUseCalibrationValue")) adcUseCalibrationValue = tree.getProperty("adcUseCalibrationValue");
+        if (tree.hasProperty("adcDefaultVrefMvValue")) adcDefaultVrefMvValue = tree.getProperty("adcDefaultVrefMvValue");
         // Buttons (UI only)
         if (tree.hasProperty("buttonCountValue")) buttonCountValue = tree.getProperty("buttonCountValue");
         if (auto btnTree = tree.getChildWithName("ButtonInputs"); btnTree.isValid()) {
@@ -651,6 +700,14 @@ public:
                 if (adcNameProps[i]) adcNameProps[i]->setVisible(vis);
                 if (adcPinProps[i])  adcPinProps[i]->setVisible(vis);
             }
+            // Advanced ADC options
+            bool const adcAdvOn = getValue<bool>(adcAdvancedOptionsValue);
+            auto setAdcAdvVis = [adcAdvOn](PropertiesPanelProperty* p){ if (p) p->setVisible(adcAdvOn); };
+            setAdcAdvVis(adcWidthProperty);
+            setAdcAdvVis(adcAttenProperty);
+            setAdcAdvVis(adcSamplesProperty);
+            setAdcAdvVis(adcUseCalibrationProperty);
+            setAdcAdvVis(adcDefaultVrefProperty);
             panel.updatePropHolderLayout();
         }
         {
@@ -716,6 +773,16 @@ public:
             setI2SAdvVis(i2sInvertBclkProperty);
             setI2SAdvVis(i2sInvertWsProperty);
             setI2SAdvVis(i2sWriteTimeoutProperty);
+        }
+        // ADC advanced visibility changes
+        if (adcAdvancedToggleProperty || adcWidthProperty) {
+            bool const adcAdvOn = getValue<bool>(adcAdvancedOptionsValue);
+            auto setAdcAdvVis = [adcAdvOn](PropertiesPanelProperty* p){ if (p) p->setVisible(adcAdvOn); };
+            setAdcAdvVis(adcWidthProperty);
+            setAdcAdvVis(adcAttenProperty);
+            setAdcAdvVis(adcSamplesProperty);
+            setAdcAdvVis(adcUseCalibrationProperty);
+            setAdcAdvVis(adcDefaultVrefProperty);
         }
         panel.updatePropHolderLayout();
 
@@ -1051,20 +1118,33 @@ public:
                 appMain << "static float pot_smooth[" << String(adcCount) << "] = { 0 } ;\n";
             }
             appMain << "static const float pot_alpha = 0.1f;\n";
-            appMain << "static const adc_atten_t POT_ATTEN = ADC_ATTEN_DB_12;\n";
-            appMain << "static const adc_bits_width_t POT_WIDTH = ADC_WIDTH_BIT_12;\n";
-            appMain << "static const uint32_t DEFAULT_VREF_MV = 1100;\n";
-            appMain << "static esp_adc_cal_characteristics_t adc_chars;\n\n";
+            int widthBits = jlimit(9, 12, getValue<int>(adcWidthValue));
+            int attenDb = getValue<int>(adcAttenValue); if (!(attenDb == 0 || attenDb == 3 || attenDb == 6 || attenDb == 11)) attenDb = 11;
+            int samplesN = jlimit(1, 64, getValue<int>(adcSamplesValue));
+            bool useCalib = getValue<bool>(adcAdvancedOptionsValue) && getValue<bool>(adcUseCalibrationValue);
+            int defVref = jlimit(900, 1300, getValue<int>(adcDefaultVrefMvValue));
+            String widthConst = (widthBits == 12 ? "ADC_WIDTH_BIT_12" : (widthBits == 11 ? "ADC_WIDTH_BIT_11" : (widthBits == 10 ? "ADC_WIDTH_BIT_10" : "ADC_WIDTH_BIT_9")));
+            String attenConst = (attenDb == 11 ? "ADC_ATTEN_DB_11" : (attenDb == 6 ? "ADC_ATTEN_DB_6" : (attenDb == 3 ? "ADC_ATTEN_DB_2_5" : "ADC_ATTEN_DB_0")));
+            int maxMv = (attenDb == 11 ? 2450 : (attenDb == 6 ? 1750 : (attenDb == 3 ? 1250 : 950)));
+            appMain << "static const adc_atten_t POT_ATTEN = " << attenConst << ";\n";
+            appMain << "static const adc_bits_width_t POT_WIDTH = " << widthConst << ";\n";
+            appMain << "static const int POT_WIDTH_BITS = " << String(widthBits) << ";\n";
+            appMain << "static const float POT_MAX_RAW_F = (float)((1 << POT_WIDTH_BITS) - 1);\n";
+            appMain << "static const uint32_t DEFAULT_VREF_MV = " << String(defVref) << ";\n";
+            appMain << "static const bool ADC_USE_CALIB = " << (useCalib ? "true" : "false") << ";\n";
+            appMain << "static const float POT_MAX_MV_F = " << String(maxMv) << ";\n";
+            appMain << "static esp_adc_cal_characteristics_t adc_chars1;\n";
+            appMain << "static esp_adc_cal_characteristics_t adc_chars2;\n\n";
             if (adcCount > 0) {
-                appMain << "static void adc_init()\n{ adc1_config_width(POT_WIDTH); for (int i = 0; i < kAdcCount; ++i) { if (use_adc1[i]) adc1_config_channel_atten(adc1_ch[i], POT_ATTEN); else adc2_config_channel_atten(adc2_ch[i], POT_ATTEN); } }\n\n";
-                appMain << "static float pot_read_norm(int idx)\n{ const int samples = 8; uint32_t acc_raw = 0; for (int s = 0; s < samples; ++s) { if (use_adc1[idx]) acc_raw += adc1_get_raw(adc1_ch[idx]); else { int v = 0; adc2_get_raw(adc2_ch[idx], POT_WIDTH, &v); acc_raw += (uint32_t)v; } } uint32_t raw = acc_raw / samples; float norm = (float)raw / 4095.0f; if (norm < 0.0f) norm = 0.0f; if (norm > 1.0f) norm = 1.0f; pot_smooth[idx] += pot_alpha * (norm - pot_smooth[idx]); return pot_smooth[idx]; }\n\n";
+                appMain << "static void adc_init()\n{ adc1_config_width(POT_WIDTH); for (int i = 0; i < kAdcCount; ++i) { if (use_adc1[i]) adc1_config_channel_atten(adc1_ch[i], POT_ATTEN); else adc2_config_channel_atten(adc2_ch[i], POT_ATTEN); } if (ADC_USE_CALIB) { esp_adc_cal_characterize(ADC_UNIT_1, POT_ATTEN, POT_WIDTH, DEFAULT_VREF_MV, &adc_chars1); esp_adc_cal_characterize(ADC_UNIT_2, POT_ATTEN, POT_WIDTH, DEFAULT_VREF_MV, &adc_chars2); } }\n\n";
+                appMain << "static float pot_read_norm(int idx)\n{ const int samples = " << String(samplesN) << "; uint32_t acc_raw = 0; for (int s = 0; s < samples; ++s) { if (use_adc1[idx]) acc_raw += adc1_get_raw(adc1_ch[idx]); else { int v = 0; adc2_get_raw(adc2_ch[idx], POT_WIDTH, &v); acc_raw += (uint32_t)v; } } uint32_t raw = acc_raw / samples; float norm; if (ADC_USE_CALIB) { uint32_t mv = esp_adc_cal_raw_to_voltage(raw, use_adc1[idx] ? &adc_chars1 : &adc_chars2); norm = (float) mv / POT_MAX_MV_F; } else { norm = (float)raw / POT_MAX_RAW_F; } if (norm < 0.0f) norm = 0.0f; if (norm > 1.0f) norm = 1.0f; pot_smooth[idx] += pot_alpha * (norm - pot_smooth[idx]); return pot_smooth[idx]; }\n\n";
                 appMain << "static volatile float pot_norm_latest[" << String(adcCount) << "] = { 0 } ;\n";
                 appMain << "static volatile uint8_t pot_dirty[" << String(adcCount) << "] = { 0 } ;\n";
                 int pollMs = jlimit(1, 100, getValue<int>(adcPollMsValue));
                 appMain << "static void ctrl_task(void* arg)\n{ (void)arg; int idx = 0; const TickType_t tick = pdMS_TO_TICKS(" << String(pollMs) << "); while (1) { pot_norm_latest[idx] = pot_read_norm(idx); pot_dirty[idx] = 1; idx = (idx + 1) % kAdcCount; ";
                 appMain << " if (kBtnCount > 0) { for (int b = 0; b < kBtnCount; ++b) { int level = gpio_get_level((gpio_num_t) BTN_PINS[b]); TickType_t now = xTaskGetTickCount(); if (level != btn_prev_level[b] && (now - btn_last_tick[b]) >= BTN_DEBOUNCE_TICKS) { btn_last_tick[b] = now; if (btn_prev_level[b] == 1 && level == 0) { btn_prev_level[b] = 0; ESP_LOGI(TAG, \"%s DOWN\", BTN_NAMES[b]); btn_bang_dirty[b] = 1; } else if (btn_prev_level[b] == 0 && level == 1) { btn_prev_level[b] = 1; ESP_LOGI(TAG, \"%s UP\", BTN_NAMES[b]); } } } } vTaskDelay(tick); } }\n\n";
             } else {
-                appMain << "static void adc_init(){}\n\n";
+                appMain << "static void adc_init(){ if (ADC_USE_CALIB) { esp_adc_cal_characterize(ADC_UNIT_1, POT_ATTEN, POT_WIDTH, DEFAULT_VREF_MV, &adc_chars1); esp_adc_cal_characterize(ADC_UNIT_2, POT_ATTEN, POT_WIDTH, DEFAULT_VREF_MV, &adc_chars2); } }\n\n";
                 int pollMsNoAdc = jlimit(1, 100, getValue<int>(adcPollMsValue));
                 appMain << "static void ctrl_task(void* arg)\n{ (void)arg; const TickType_t tick = pdMS_TO_TICKS(" << String(pollMsNoAdc) << "); while (1) { if (kBtnCount > 0) { for (int b = 0; b < kBtnCount; ++b) { int level = gpio_get_level((gpio_num_t) BTN_PINS[b]); TickType_t now = xTaskGetTickCount(); if (level != btn_prev_level[b] && (now - btn_last_tick[b]) >= BTN_DEBOUNCE_TICKS) { btn_last_tick[b] = now; if (btn_prev_level[b] == 1 && level == 0) { btn_prev_level[b] = 0; ESP_LOGI(TAG, \"%s DOWN\", BTN_NAMES[b]); btn_bang_dirty[b] = 1; } else if (btn_prev_level[b] == 0 && level == 1) { btn_prev_level[b] = 1; ESP_LOGI(TAG, \"%s UP\", BTN_NAMES[b]); } } } } vTaskDelay(tick); } }\n\n";
             }
