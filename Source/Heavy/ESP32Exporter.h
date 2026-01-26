@@ -18,7 +18,7 @@ public:
         : PropertiesPanelProperty(propertyName), value(pinValue)
     {
         // Common ADC-capable pins on ESP32
-        addItem("Unassigned", 0);
+        addItem("Unassigned", -1);
         addItem("GPIO32", 32);
         addItem("GPIO33", 33);
         addItem("GPIO34", 34);
@@ -38,7 +38,10 @@ public:
         addItem("GPIO27", 27);
 
         combo.onChange = [this] {
-            value = combo.getSelectedId();
+            int id = combo.getSelectedId();
+            int mapped = -1;
+            if (idToGpio.contains(id)) mapped = idToGpio[id];
+            value = mapped;
         };
         value.addListener(this);
         addAndMakeVisible(combo);
@@ -47,9 +50,12 @@ public:
 
     void valueChanged(Value& v) override
     {
-        const int pin = getValue<int>(v);
-        if (combo.getSelectedId() != pin)
-            combo.setSelectedId(pin, dontSendNotification);
+        const int gpio = getValue<int>(v);
+        int id = gpioToId[gpio];
+        if (id > 0) {
+            if (combo.getSelectedId() != id)
+                combo.setSelectedId(id, dontSendNotification);
+        }
     }
 
     void resized() override
@@ -58,13 +64,97 @@ public:
     }
 
 private:
-    void addItem(String const& label, int id)
+    void addItem(String const& label, int gpio)
     {
+        int id = nextComboId++;
         combo.addItem(label, id);
+        itemIds.add(id);
+        idToGpio.set(id, gpio);
+        gpioToId.set(gpio, id);
+    }
+
+public:
+    // Disable items present in 'pins' except keepEnabledId (this combo's current selection)
+    void setDisabledPins(Array<int> const& pins, int keepEnabledGpio)
+    {
+        for (int i = 0; i < itemIds.size(); ++i) {
+            int id = itemIds[i];
+            int gpio = -1;
+            if (idToGpio.contains(id)) gpio = idToGpio[id];
+            bool disable = pins.contains(gpio) && (gpio != keepEnabledGpio);
+            combo.setItemEnabled(id, !disable);
+        }
     }
 
     Value& value;
     ComboBox combo;
+    Array<int> itemIds;              // Combo item IDs (>0)
+    int nextComboId = 1;             // Monotonic combo id generator
+    HashMap<int,int> idToGpio;       // Combo item ID -> GPIO value (may be -1 for Unassigned)
+    HashMap<int,int> gpioToId;       // GPIO value -> Combo item ID
+};
+
+// Generic GPIO selection property with a provided allowed-pin list
+class GpioPinProperty final : public PropertiesPanelProperty, public Value::Listener {
+public:
+    GpioPinProperty(String const& propertyName, Value& pinValue, const Array<int>& allowed)
+        : PropertiesPanelProperty(propertyName), value(pinValue)
+    {
+        addItem("Unassigned", -1);
+        for (int gpio : allowed) {
+            addItem("GPIO" + String(gpio), gpio);
+        }
+        combo.onChange = [this] {
+            int id = combo.getSelectedId();
+            int mapped = -1;
+            if (idToGpio.contains(id)) mapped = idToGpio[id];
+            value = mapped;
+        };
+        value.addListener(this);
+        addAndMakeVisible(combo);
+        refresh();
+    }
+
+    void valueChanged(Value& v) override
+    {
+        const int gpio = getValue<int>(v);
+        int id = gpioToId[gpio];
+        if (id > 0 && combo.getSelectedId() != id)
+            combo.setSelectedId(id, dontSendNotification);
+    }
+
+    void resized() override
+    {
+        combo.setBounds(getLocalBounds().removeFromRight(getWidth() / (2 - hideLabel)));
+    }
+
+    void setDisabledPins(Array<int> const& pins, int keepEnabledGpio)
+    {
+        for (int i = 0; i < itemIds.size(); ++i) {
+            int id = itemIds[i];
+            int gpio = -1;
+            if (idToGpio.contains(id)) gpio = idToGpio[id];
+            bool disable = pins.contains(gpio) && (gpio != keepEnabledGpio);
+            combo.setItemEnabled(id, !disable);
+        }
+    }
+
+private:
+    void addItem(String const& label, int gpio)
+    {
+        int id = nextComboId++;
+        combo.addItem(label, id);
+        itemIds.add(id);
+        idToGpio.set(id, gpio);
+        gpioToId.set(gpio, id);
+    }
+
+    Value& value;
+    ComboBox combo;
+    Array<int> itemIds;
+    int nextComboId = 1;
+    HashMap<int,int> idToGpio;
+    HashMap<int,int> gpioToId;
 };
 
 // Custom property: Add/Remove ADC controls in a single row
@@ -261,9 +351,123 @@ public:
     PropertiesPanelProperty* buttonNameProps[kMaxButtons] {};
     PropertiesPanelProperty* buttonPinProps[kMaxButtons] {};
 
+private:
+    Array<int> reservedPins; // GPIOs reserved by ADC/Button selections
+    Array<int> preferredPins; // Order to auto-assign defaults
+
+    void addI2sPinsTo(Array<int>& list) const
+    {
+        // Only reserve I2S pins when external DAC is active
+        bool useI2S = getValue<int>(audioOutputValue) == 2;
+        if (!useI2S) return;
+        auto addUnique = [&list](int pin){ if (pin >= 0 && ! list.contains(pin)) list.add(pin); };
+        if (getValue<bool>(i2sUseMclkValue)) addUnique(getValue<int>(i2sMclkPinValue));
+        addUnique(getValue<int>(i2sBclkPinValue));
+        addUnique(getValue<int>(i2sWsPinValue));
+        addUnique(getValue<int>(i2sDoutPinValue));
+        if (getValue<bool>(i2sUseDinValue)) addUnique(getValue<int>(i2sDinPinValue));
+    }
+
+    void addDacPinsTo(Array<int>& list) const
+    {
+        // Reserve internal DAC output pins when ESP32 DAC is selected
+        bool useDac = getValue<int>(audioOutputValue) == 1;
+        if (!useDac) return;
+        auto addUnique = [&list](int pin){ if (pin >= 0 && ! list.contains(pin)) list.add(pin); };
+        int leftSel = getValue<int>(leftDacPinValue);  // 1 -> GPIO25, 2 -> GPIO26
+        int rightSel = getValue<int>(rightDacPinValue); // 1 -> GPIO25, 2 -> GPIO26
+        if (leftSel == 1 || rightSel == 1) addUnique(25);
+        if (leftSel == 2 || rightSel == 2) addUnique(26);
+    }
+
+    void recomputeReservedPins()
+    {
+        reservedPins.clear();
+        addDacPinsTo(reservedPins);
+        addI2sPinsTo(reservedPins);
+        int count = jlimit(0, kMaxAdc, getValue<int>(adcCountValue));
+        for (int i = 0; i < count; ++i) {
+            int pin = getValue<int>(adcPinValues[i]);
+            if (pin >= 0 && ! reservedPins.contains(pin)) reservedPins.add(pin);
+        }
+        int bcount = jlimit(0, kMaxButtons, getValue<int>(buttonCountValue));
+        for (int i = 0; i < bcount; ++i) {
+            int pin = getValue<int>(buttonPinValues[i]);
+            if (pin >= 0 && ! reservedPins.contains(pin)) reservedPins.add(pin);
+        }
+    }
+
+    int nextAvailablePin() const
+    {
+        for (int i = 0; i < preferredPins.size(); ++i) {
+            int pin = preferredPins[i];
+            if (! reservedPins.contains(pin)) return pin;
+        }
+        return -1; // none available
+    }
+
+    void fixConflicts()
+    {
+        reservedPins.clear();
+        addDacPinsTo(reservedPins);
+        addI2sPinsTo(reservedPins);
+        // Prefer earlier entries: ADC first, then Buttons
+        int count = jlimit(0, kMaxAdc, getValue<int>(adcCountValue));
+        for (int i = 0; i < count; ++i) {
+            int pin = getValue<int>(adcPinValues[i]);
+            if (pin < 0 || reservedPins.contains(pin)) {
+                int np = nextAvailablePin();
+                adcPinValues[i] = np;
+                if (np >= 0) reservedPins.add(np);
+            } else {
+                reservedPins.add(pin);
+            }
+        }
+        int bcount = jlimit(0, kMaxButtons, getValue<int>(buttonCountValue));
+        for (int i = 0; i < bcount; ++i) {
+            int pin = getValue<int>(buttonPinValues[i]);
+            if (pin < 0 || reservedPins.contains(pin)) {
+                int np = nextAvailablePin();
+                buttonPinValues[i] = np;
+                if (np >= 0) reservedPins.add(np);
+            } else {
+                reservedPins.add(pin);
+            }
+        }
+    }
+
+    void refreshPinCombos()
+    {
+        int count = jlimit(0, kMaxAdc, getValue<int>(adcCountValue));
+        for (int i = 0; i < count; ++i) {
+            int keep = getValue<int>(adcPinValues[i]);
+            if (auto* prop = dynamic_cast<AdcPinProperty*>(adcPinProps[i])) {
+                prop->setDisabledPins(reservedPins, keep);
+            }
+        }
+        int bcount = jlimit(0, kMaxButtons, getValue<int>(buttonCountValue));
+        for (int i = 0; i < bcount; ++i) {
+            int keep = getValue<int>(buttonPinValues[i]);
+            if (auto* prop = dynamic_cast<AdcPinProperty*>(buttonPinProps[i])) {
+                prop->setDisabledPins(reservedPins, keep);
+            }
+        }
+        // Also update I2S combos
+        {
+            int keep;
+            if (auto* gp = dynamic_cast<GpioPinProperty*>(i2sMclkPinProperty)) { keep = getValue<int>(i2sMclkPinValue); gp->setDisabledPins(reservedPins, keep); }
+            if (auto* gp = dynamic_cast<GpioPinProperty*>(i2sBclkPinProperty)) { keep = getValue<int>(i2sBclkPinValue); gp->setDisabledPins(reservedPins, keep); }
+            if (auto* gp = dynamic_cast<GpioPinProperty*>(i2sWsPinProperty))   { keep = getValue<int>(i2sWsPinValue);   gp->setDisabledPins(reservedPins, keep); }
+            if (auto* gp = dynamic_cast<GpioPinProperty*>(i2sDoutPinProperty)) { keep = getValue<int>(i2sDoutPinValue); gp->setDisabledPins(reservedPins, keep); }
+            if (auto* gp = dynamic_cast<GpioPinProperty*>(i2sDinPinProperty))  { keep = getValue<int>(i2sDinPinValue);  gp->setDisabledPins(reservedPins, keep); }
+        }
+    }
+
+public:
     ESP32Exporter(PluginEditor* editor, ExportingProgressView* exportingView)
         : ExporterBase(editor, exportingView)
     {
+        preferredPins = { 33, 32, 34, 35, 36, 39, 4, 0, 2, 12, 13, 14, 15, 25, 26, 27 };
         // Audio Output section
         {
             PropertiesArray properties;
@@ -298,12 +502,15 @@ public:
             properties.add(freqOverrideHzProperty);
             // I2S basic pins
             i2sUseMclkProperty = new PropertiesPanel::BoolComponent("Use MCLK", i2sUseMclkValue, { "No", "Yes" });
-            i2sMclkPinProperty = new PropertiesPanel::EditableComponent<int>("MCLK pin", i2sMclkPinValue, 0, 39);
-            i2sBclkPinProperty = new PropertiesPanel::EditableComponent<int>("BCLK pin", i2sBclkPinValue, 0, 39);
-            i2sWsPinProperty = new PropertiesPanel::EditableComponent<int>("WS pin", i2sWsPinValue, 0, 39);
-            i2sDoutPinProperty = new PropertiesPanel::EditableComponent<int>("DOUT pin", i2sDoutPinValue, 0, 39);
-            i2sUseDinProperty = new PropertiesPanel::BoolComponent("Use DIN", i2sUseDinValue, { "No", "Yes" });
-            i2sDinPinProperty = new PropertiesPanel::EditableComponent<int>("DIN pin", i2sDinPinValue, 0, 39);
+            // Allowed sets for I2S pins
+            Array<int> i2sOutPins; i2sOutPins.addArray(Array<int>({0,2,4,5,12,13,14,15,16,17,18,19,21,22,23,25,26,27,32,33}));
+            Array<int> i2sInPins;  i2sInPins.addArray(i2sOutPins); i2sInPins.addArray(Array<int>({34,35,36,39}));
+            i2sMclkPinProperty = new GpioPinProperty("MCLK pin", i2sMclkPinValue, i2sOutPins);
+            i2sBclkPinProperty = new GpioPinProperty("BCLK pin", i2sBclkPinValue, i2sOutPins);
+            i2sWsPinProperty   = new GpioPinProperty("WS pin",   i2sWsPinValue,   i2sOutPins);
+            i2sDoutPinProperty = new GpioPinProperty("DOUT pin", i2sDoutPinValue, i2sOutPins);
+            i2sUseDinProperty  = new PropertiesPanel::BoolComponent("Use DIN", i2sUseDinValue, { "No", "Yes" });
+            i2sDinPinProperty  = new GpioPinProperty("DIN pin",  i2sDinPinValue,  i2sInPins);
             properties.add(i2sUseMclkProperty);
             properties.add(i2sMclkPinProperty);
             properties.add(i2sBclkPinProperty);
@@ -344,7 +551,7 @@ public:
             // Initialize default values for ADC rows
             for (int i = 0; i < kMaxAdc; ++i) {
                 adcNameValues[i] = SynchronousValue(var("Knob " + String(i + 1)));
-                int defaultPin = 0;
+                int defaultPin = -1;
                 if (i == 0) defaultPin = 33; // GPIO33 (ADC1_CH5)
                 else if (i == 1) defaultPin = 32; // GPIO32 (ADC1_CH4)
                 else if (i == 2) defaultPin = 34; // GPIO34 (ADC1_CH6)
@@ -366,9 +573,14 @@ public:
                 [this]{
                     int count = getValue<int>(adcCountValue);
                     if (count < kMaxAdc) {
+                        recomputeReservedPins();
+                        int next = nextAvailablePin();
                         adcCountValue = count + 1;
                         if (adcNameProps[count]) adcNameProps[count]->setVisible(true);
                         if (adcPinProps[count])  adcPinProps[count]->setVisible(true);
+                        if (next >= 0) adcPinValues[count] = next;
+                        fixConflicts();
+                        refreshPinCombos();
                         panel.updatePropHolderLayout();
                     }
                 },
@@ -379,6 +591,8 @@ public:
                         adcCountValue = count;
                         if (adcNameProps[count]) adcNameProps[count]->setVisible(false);
                         if (adcPinProps[count])  adcPinProps[count]->setVisible(false);
+                        recomputeReservedPins();
+                        refreshPinCombos();
                         panel.updatePropHolderLayout();
                     }
                 }
@@ -407,7 +621,7 @@ public:
             // Initialize defaults for button rows
             for (int i = 0; i < kMaxButtons; ++i) {
                 buttonNameValues[i] = SynchronousValue(var("Button " + String(i + 1)));
-                int defaultPin = 0;
+                int defaultPin = -1;
                 if (i == 0) defaultPin = 33; // GPIO33
                 else if (i == 1) defaultPin = 32; // GPIO32
                 else if (i == 2) defaultPin = 34; // GPIO34
@@ -427,9 +641,14 @@ public:
                 [this]{
                     int count = getValue<int>(buttonCountValue);
                     if (count < kMaxButtons) {
+                        recomputeReservedPins();
+                        int next = nextAvailablePin();
                         buttonCountValue = count + 1;
                         if (buttonNameProps[count]) buttonNameProps[count]->setVisible(true);
                         if (buttonPinProps[count])  buttonPinProps[count]->setVisible(true);
+                        if (next >= 0) buttonPinValues[count] = next;
+                        fixConflicts();
+                        refreshPinCombos();
                         panel.updatePropHolderLayout();
                     }
                 },
@@ -440,6 +659,8 @@ public:
                         buttonCountValue = count;
                         if (buttonNameProps[count]) buttonNameProps[count]->setVisible(false);
                         if (buttonPinProps[count])  buttonPinProps[count]->setVisible(false);
+                        recomputeReservedPins();
+                        refreshPinCombos();
                         panel.updatePropHolderLayout();
                     }
                 }
@@ -544,6 +765,8 @@ public:
             panel.updatePropHolderLayout();
         };
         initVisibility();
+        fixConflicts();
+        refreshPinCombos();
 
     }
 
@@ -719,6 +942,8 @@ public:
             }
             panel.updatePropHolderLayout();
         }
+        fixConflicts();
+        refreshPinCombos();
     }
 
     void valueChanged(Value& v) override {
@@ -797,6 +1022,32 @@ public:
                 }
             }
         }
+
+        // Update reserved pins and disable used GPIOs in ADC/Button combos
+        bool pinChanged = false;
+        for (int i = 0; i < kMaxAdc; ++i) {
+            if (v.refersToSameSourceAs(adcPinValues[i])) { pinChanged = true; break; }
+        }
+        if (! pinChanged) {
+            for (int i = 0; i < kMaxButtons; ++i) {
+                if (v.refersToSameSourceAs(buttonPinValues[i])) { pinChanged = true; break; }
+            }
+        }
+        if (! pinChanged) {
+            // I2S and output mode changes affect reservations
+            if (v.refersToSameSourceAs(audioOutputValue) ||
+                v.refersToSameSourceAs(i2sUseMclkValue) || v.refersToSameSourceAs(i2sMclkPinValue) ||
+                v.refersToSameSourceAs(i2sBclkPinValue) || v.refersToSameSourceAs(i2sWsPinValue) ||
+                v.refersToSameSourceAs(i2sDoutPinValue) || v.refersToSameSourceAs(i2sUseDinValue) ||
+                v.refersToSameSourceAs(i2sDinPinValue) ||
+                v.refersToSameSourceAs(leftDacPinValue) || v.refersToSameSourceAs(rightDacPinValue)) {
+                pinChanged = true;
+            }
+        }
+        if (pinChanged) {
+            fixConflicts();
+            refreshPinCombos();
+        }
     }
 
     bool performExport(String const& pdPatch, String const& outdir, String const& name,
@@ -855,13 +1106,13 @@ public:
                 knob1Name = getValue<String>(adcNameValues[0]);
                 knob1Pin = getValue<int>(adcPinValues[0]);
                 if (knob1Name.isEmpty()) knob1Name = "Knob1";
-                if (knob1Pin <= 0) knob1Pin = 33;
+                if (knob1Pin < 0) knob1Pin = 33;
             }
             if (adcCount > 1) {
                 knob2Name = getValue<String>(adcNameValues[1]);
                 knob2Pin = getValue<int>(adcPinValues[1]);
                 if (knob2Name.isEmpty()) knob2Name = "Knob2";
-                if (knob2Pin <= 0) knob2Pin = 32;
+                if (knob2Pin < 0) knob2Pin = 32;
             }
             if (getValue<int>(audioOutputValue) == 1) {
                 // ESP32 DAC path (continuous mode)
@@ -1057,7 +1308,7 @@ public:
                 String names("static const char* BTN_NAMES[" + String(btnCount) + "] = { ");
                 for (int i = 0; i < btnCount; ++i) {
                     int pin = getValue<int>(buttonPinValues[i]);
-                    if (pin <= 0) pin = (i == 0 ? 33 : (i == 1 ? 32 : 34));
+                    if (pin < 0) pin = (i == 0 ? 33 : (i == 1 ? 32 : 34));
                     String nm = getValue<String>(buttonNameValues[i]);
                     if (nm.isEmpty()) nm = String("Button ") + String(i + 1);
                     pins << String(pin);
@@ -1079,7 +1330,7 @@ public:
                 String a2Arr("static const adc2_channel_t adc2_ch[" + String(adcCount) + "] = { ");
                 for (int i = 0; i < adcCount; ++i) {
                     int pin = getValue<int>(adcPinValues[i]);
-                    if (pin <= 0) pin = 32;
+                    if (pin < 0) pin = 32;
                     bool useAdc1 = (pin == 32 || pin == 33 || pin == 34 || pin == 35 || pin == 36 || pin == 39);
                     String adc1ChConst = "ADC1_CHANNEL_4";
                     String adc2ChConst = "ADC2_CHANNEL_0";
